@@ -3,11 +3,17 @@ import { betterAuth } from "better-auth";
 
 type Env = {
   DB: D1Database;
+  APP_URL?: string;
+  FLY_AUTH_ORIGIN?: string;
 };
 
 export function createAuth(env: Env) {
   return betterAuth({
-    appName: "Warp Template Cloudflare Fullstack",
+    appName: "Fly Dev",
+    baseURL: env.APP_URL,
+    trustedOrigins: [env.APP_URL, env.FLY_AUTH_ORIGIN].filter(
+      (origin): origin is string => Boolean(origin),
+    ),
     database: env.DB,
     emailAndPassword: {
       enabled: true,

@@ -1,12 +1,50 @@
-# Cloudflare Fullstack Template
+# Fly Dev Orchestrator
 
-Run the app with `doppler run -- npm install` and `doppler run -- npm run dev`.
+Cloudflare-native orchestration surface for the fly.pm app family, hosted at `dev.fly.pm`.
 
-The Vite client proxies `/api` to the local Worker on `127.0.0.1:8787`.
-The Worker exposes:
+## What it does
 
-- `GET /api/health`
-- `GET /api/me` returning `null` when signed out
+- Tracks fly users, GitHub/Linear connections, usage events, project mappings, runs, artifacts, approvals, and agent memories in D1.
+- Uses Cloudflare Durable Objects, Queues, Workflows, Containers, R2, KV, AI Gateway, Browser Rendering, and Workers for Platforms dispatch namespaces.
+- Exposes an operations dashboard plus APIs for user tasks, internal fly.pm status checks, one-off deploy requests, OAuth connections, webhooks, and template app creation.
+- Keeps Linear as the project source of truth and maps Linear projects to GitHub repositories with confidence scoring.
+- Preserves CLI execution as the sandbox model: Codex CLI and Claude Code run inside a Cloudflare Container with an explicit allowlist.
 
-The D1 binding and Better Auth config are scaffolded for Cloudflare deployment.
-The `template.toml` file is intentionally a stub until the PDX-63 manifest schema is defined.
+## Local development
+
+```sh
+npm install
+npm run migrate:local
+npm run dev
+```
+
+The Vite app runs on `127.0.0.1:5173` and proxies `/api` to the Worker on `127.0.0.1:8787`.
+
+## Verification
+
+```sh
+npm run typecheck
+npm test
+npm run build
+npm run cf:dry-run
+```
+
+`wrangler.jsonc` contains the production D1/KV bindings created for `fly-dev`; credentials and signing keys should be set with Wrangler secrets.
+
+## Required secrets
+
+- `TOKEN_ENCRYPTION_KEY`
+- `INTERNAL_API_SECRET`
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+- `GITHUB_WEBHOOK_SECRET`
+- `LINEAR_CLIENT_ID`
+- `LINEAR_CLIENT_SECRET`
+- `LINEAR_WEBHOOK_SECRET`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`
+
+## Template dependencies
+
+- Cloudflare apps: `aloewright/aloe-template-cloudflare-fullstack`
+- Swift apps: `aloewright/warp-template-apple-multiplatform`

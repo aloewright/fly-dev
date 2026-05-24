@@ -1,19 +1,19 @@
-# Instincts generated from https://github.com/aloewright/warp-template-cloudflare-fullstack
+# Instincts generated from https://github.com/aloewright/fly-dev
 # Generated: 2026-04-30T22:35:50.057Z
 # Version: 2.0
 # NOTE: This file supplements (does not replace) any existing curated instincts.
 # High-confidence manually curated instincts should be preserved alongside these.
 
 ---
-id: warp-template-cloudflare-fullstack-commit-length
+id: fly-dev-commit-length
 trigger: "when writing a commit message"
 confidence: 0.6
 domain: git
 source: repo-analysis
-source_repo: https://github.com/aloewright/warp-template-cloudflare-fullstack
+source_repo: https://github.com/aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Commit Length
+# Fly Dev Commit Length
 
 ## Action
 
@@ -25,15 +25,15 @@ Keep commit messages concise (~16 characters)
 - Based on 1 commits
 
 ---
-id: warp-template-cloudflare-fullstack-naming-files
+id: fly-dev-naming-files
 trigger: "when creating a new file"
 confidence: 0.8
 domain: code-style
 source: repo-analysis
-source_repo: https://github.com/aloewright/warp-template-cloudflare-fullstack
+source_repo: https://github.com/aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Naming Files
+# Fly Dev Naming Files
 
 ## Action
 
@@ -45,15 +45,15 @@ Use camelCase naming convention
 - Dominant pattern: camelCase
 
 ---
-id: warp-template-cloudflare-fullstack-import-alias
+id: fly-dev-import-alias
 trigger: "when importing modules"
 confidence: 0.85
 domain: code-style
 source: repo-analysis
-source_repo: https://github.com/aloewright/warp-template-cloudflare-fullstack
+source_repo: https://github.com/aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Import Alias
+# Fly Dev Import Alias
 
 ## Action
 
@@ -65,15 +65,15 @@ Use path aliases (@/, ~/) instead of relative imports
 - Example: import { x } from '@/lib/x'
 
 ---
-id: warp-template-cloudflare-fullstack-export-style
+id: fly-dev-export-style
 trigger: "when exporting from a module"
 confidence: 0.7
 domain: code-style
 source: repo-analysis
-source_repo: https://github.com/aloewright/warp-template-cloudflare-fullstack
+source_repo: https://github.com/aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Export Style
+# Fly Dev Export Style
 
 ## Action
 
@@ -85,15 +85,15 @@ Prefer mixed exports
 - Dominant style: mixed
 
 ---
-id: warp-template-cloudflare-fullstack-arch-type-based
+id: fly-dev-arch-type-based
 trigger: "when adding new code"
 confidence: 0.8
 domain: architecture
 source: repo-analysis
-source_repo: https://github.com/aloewright/warp-template-cloudflare-fullstack
+source_repo: https://github.com/aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Arch Type Based
+# Fly Dev Arch Type Based
 
 ## Action
 
@@ -105,15 +105,15 @@ Place code in the appropriate type folder (components/, services/, utils/, etc.)
 - Folders: components, lib
 
 ---
-id: warp-template-cloudflare-fullstack-test-separate
+id: fly-dev-test-separate
 trigger: "when writing tests"
 confidence: 0.8
 domain: testing
 source: repo-analysis
-source_repo: https://github.com/aloewright/warp-template-cloudflare-fullstack
+source_repo: https://github.com/aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Test Separate
+# Fly Dev Test Separate
 
 ## Action
 
@@ -125,15 +125,15 @@ Place tests in the tests/ or __tests__/ directory, mirroring src structure
 - Tests live in dedicated test folders
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-file-naming
+id: fly-dev-instinct-file-naming
 trigger: "When creating a new file"
 confidence: 0.8
 domain: code-style
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct File Naming
+# Fly Dev Instinct File Naming
 
 ## Action
 
@@ -144,15 +144,15 @@ Name the file using camelCase
 - Pattern in namingConventions.files
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-function-naming
+id: fly-dev-instinct-function-naming
 trigger: "When defining a new function"
 confidence: 0.8
 domain: code-style
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct Function Naming
+# Fly Dev Instinct Function Naming
 
 ## Action
 
@@ -163,15 +163,15 @@ Name the function using camelCase
 - Pattern in namingConventions.functions
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-class-naming
+id: fly-dev-instinct-class-naming
 trigger: "When defining a new class"
 confidence: 0.8
 domain: code-style
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct Class Naming
+# Fly Dev Instinct Class Naming
 
 ## Action
 
@@ -182,15 +182,15 @@ Name the class using PascalCase
 - Pattern in namingConventions.classes
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-constant-naming
+id: fly-dev-instinct-constant-naming
 trigger: "When declaring a constant"
 confidence: 0.8
 domain: code-style
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct Constant Naming
+# Fly Dev Instinct Constant Naming
 
 ## Action
 
@@ -201,15 +201,15 @@ Name the constant using SCREAMING_SNAKE_CASE
 - Pattern in namingConventions.constants
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-import-alias
+id: fly-dev-instinct-import-alias
 trigger: "When importing modules"
 confidence: 0.7
 domain: code-style
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct Import Alias
+# Fly Dev Instinct Import Alias
 
 ## Action
 
@@ -220,15 +220,15 @@ Use import aliases instead of relative paths
 - Pattern in importStyle: alias
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-export-mixed
+id: fly-dev-instinct-export-mixed
 trigger: "When exporting modules or components"
 confidence: 0.7
 domain: code-style
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct Export Mixed
+# Fly Dev Instinct Export Mixed
 
 ## Action
 
@@ -239,15 +239,15 @@ Use both named and default exports as appropriate
 - Pattern in exportStyle: mixed
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-test-location
+id: fly-dev-instinct-test-location
 trigger: "When adding new tests"
 confidence: 0.8
 domain: testing
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct Test Location
+# Fly Dev Instinct Test Location
 
 ## Action
 
@@ -258,15 +258,15 @@ Place test files in a separate directory from source files
 - Pattern in architecture.folderStructure.testLocation: separate
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-commit-message-freeform
+id: fly-dev-instinct-commit-message-freeform
 trigger: "When writing a commit message"
 confidence: 0.8
 domain: git
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct Commit Message Freeform
+# Fly Dev Instinct Commit Message Freeform
 
 ## Action
 
@@ -278,15 +278,15 @@ Use a freeform, concise commit message without a required prefix
 - Example: 'Initial scaffold'
 
 ---
-id: warp-template-cloudflare-fullstack-instinct-commit-message-length
+id: fly-dev-instinct-commit-message-length
 trigger: "When composing a commit message"
 confidence: 0.7
 domain: git
 source: repo-analysis
-source_repo: aloewright/warp-template-cloudflare-fullstack
+source_repo: aloewright/fly-dev
 ---
 
-# Warp Template Cloudflare Fullstack Instinct Commit Message Length
+# Fly Dev Instinct Commit Message Length
 
 ## Action
 

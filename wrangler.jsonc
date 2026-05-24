@@ -1,0 +1,145 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fly-dev",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-05-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist",
+    "binding": "ASSETS"
+  },
+  "routes": [
+    {
+      "pattern": "dev.fly.pm",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "browser": {
+    "binding": "MYBROWSER"
+  },
+  "dispatch_namespaces": [
+    {
+      "binding": "USER_WORKERS",
+      "namespace": "fly-dev-production"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "486f8ccff1744020a1d8427f1d60ccdc"
+    },
+    {
+      "binding": "SESSION_CACHE",
+      "id": "53f23a4907da4f3e9a97d40c1c4f1f9a"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "fly-dev-artifacts"
+    },
+    {
+      "binding": "TEMPLATE_ASSETS",
+      "bucket_name": "fly-dev-template-assets"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fly-dev",
+      "database_id": "3f03fde5-d0ba-4f35-940e-318567b45cab",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "WORK_QUEUE",
+        "queue": "fly-dev-work"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "fly-dev-work",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "fly-dev-work-dlq"
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "name": "fly-dev-run-workflow",
+      "binding": "RUN_WORKFLOW",
+      "class_name": "RunWorkflow"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT_CONDUCTORS",
+        "class_name": "ProjectConductor"
+      },
+      {
+        "name": "USER_WORKER_CONTROLLERS",
+        "class_name": "UserWorkerController"
+      },
+      {
+        "name": "DEV_ORCHESTRATOR",
+        "class_name": "DevOrchestratorAgent"
+      },
+      {
+        "name": "SANDBOX_CONTAINER",
+        "class_name": "SandboxContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ProjectConductor",
+        "UserWorkerController",
+        "DevOrchestratorAgent",
+        "SandboxContainer"
+      ]
+    }
+  ],
+  "containers": [
+    {
+      "class_name": "SandboxContainer",
+      "image": "./container/Dockerfile",
+      "max_instances": 10
+    }
+  ],
+  "vars": {
+    "APP_ENV": "production",
+    "APP_URL": "https://dev.fly.pm",
+    "AI_GATEWAY_ID": "default",
+    "APPLE_TEMPLATE_REPO": "aloewright/warp-template-apple-multiplatform",
+    "CLOUDFLARE_TEMPLATE_REPO": "aloewright/aloe-template-cloudflare-fullstack",
+    "FIRECRAWL_WORKER_URL": "https://firecrawl-cf.lazee.workers.dev",
+    "FLY_AUTH_ORIGIN": "https://fly.pm",
+    "PLAYWRIGHT_WORKER_URL": "",
+    "REQUIRE_HUMAN_APPROVAL": "true"
+  }
+}

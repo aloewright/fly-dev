@@ -1,10 +1,10 @@
 ```markdown
-# warp-template-cloudflare-fullstack Development Patterns
+# fly-dev Development Patterns
 
 > Auto-generated skill from repository analysis
 
 ## Overview
-This skill covers the core development patterns and conventions used in the `warp-template-cloudflare-fullstack` repository. The codebase is a TypeScript fullstack template leveraging the Vite framework, designed for rapid development and deployment on Cloudflare. This guide documents file naming, import/export styles, commit patterns, and testing strategies to ensure consistency and maintainability.
+This skill covers the core development patterns and conventions used in the `fly-dev` repository. The codebase is a TypeScript fullstack template leveraging the Vite framework, designed for rapid development and deployment on Cloudflare. This guide documents file naming, import/export styles, commit patterns, and testing strategies to ensure consistency and maintainability.
 
 ## Coding Conventions
 

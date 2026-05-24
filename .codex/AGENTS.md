@@ -4,8 +4,8 @@ This supplements the root `AGENTS.md` with a repo-local ECC baseline.
 
 ## Repo Skill
 
-- Repo-generated Codex skill: `.agents/skills/warp-template-cloudflare-fullstack/SKILL.md`
-- Claude-facing companion skill: `.claude/skills/warp-template-cloudflare-fullstack/SKILL.md`
+- Repo-generated Codex skill: `.agents/skills/fly-dev/SKILL.md`
+- Claude-facing companion skill: `.claude/skills/fly-dev/SKILL.md`
 - Keep user-specific credentials and private MCPs in `~/.codex/config.toml`, not in this repo.
 
 ## MCP Baseline

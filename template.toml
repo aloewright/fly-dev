@@ -1,2 +1,25 @@
 # AGPL-3.0-or-later
-# TODO(PDX-63): Define the template manifest schema before filling this file in.
+name = "fly-dev"
+description = "Cloudflare-native fly.pm orchestrator for Linear projects, user Workers, and code sandboxes."
+license = "AGPL-3.0-or-later"
+
+[runtime]
+platform = "cloudflare-workers"
+worker = "fly-dev"
+domain = "dev.fly.pm"
+
+[templates]
+cloudflare_fullstack = "aloewright/aloe-template-cloudflare-fullstack"
+apple_multiplatform = "aloewright/warp-template-apple-multiplatform"
+
+[capabilities]
+durable_objects = true
+workflows = true
+queues = true
+containers = true
+d1 = true
+r2 = true
+kv = true
+ai_gateway = true
+browser_rendering = true
+workers_for_platforms = true
