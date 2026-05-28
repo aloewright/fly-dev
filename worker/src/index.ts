@@ -156,6 +156,156 @@ function aiResponseEnvelope(args: {
   };
 }
 
+async function streamAi(
+  env: Env,
+  route: "binding" | "dynamic",
+  messages: ChatMessage[],
+  maxTokens: number,
+): Promise<ReadableStream<Uint8Array>> {
+  const gatewayId = env.AI_GATEWAY_ID || "x";
+  const model = route === "dynamic" ? "dynamic/text_gen" : AI_TEST_MODEL;
+  return (await (
+    env.AI as unknown as {
+      run: (
+        m: string,
+        i: unknown,
+        o: { gateway: { id: string } },
+      ) => Promise<ReadableStream<Uint8Array>>;
+    }
+  ).run(
+    model,
+    { messages, max_tokens: maxTokens, stream: true },
+    { gateway: { id: gatewayId } },
+  )) as ReadableStream<Uint8Array>;
+}
+
+// Re-wrap OpenAI-compatible SSE chunks (`data: {...}\n\ndata: [DONE]\n\n`)
+// as line-delimited JSON: `{"delta":"...","finishReason":null,"done":false}\n`
+// per chunk, terminated by `{"done":true}\n`.
+function sseToNdjson(): TransformStream<Uint8Array, Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+  let sawDone = false;
+  return new TransformStream({
+    transform(chunk, controller) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+      for (const event of events) {
+        const dataLine = event.split("\n").find((l) => l.startsWith("data: "));
+        if (!dataLine) continue;
+        const payload = dataLine.slice("data: ".length).trim();
+        if (payload === "[DONE]") {
+          sawDone = true;
+          controller.enqueue(encoder.encode(JSON.stringify({ done: true }) + "\n"));
+          continue;
+        }
+        try {
+          const evt = JSON.parse(payload) as {
+            choices?: Array<{
+              delta?: { content?: string | null };
+              finish_reason?: string | null;
+            }>;
+          };
+          const delta = evt.choices?.[0]?.delta?.content ?? null;
+          const finishReason = evt.choices?.[0]?.finish_reason ?? null;
+          if (delta !== null || finishReason !== null) {
+            controller.enqueue(
+              encoder.encode(JSON.stringify({ delta, finishReason, done: false }) + "\n"),
+            );
+          }
+        } catch {
+          // skip malformed payload
+        }
+      }
+    },
+    flush(controller) {
+      if (!sawDone) {
+        controller.enqueue(encoder.encode(JSON.stringify({ done: true }) + "\n"));
+      }
+    },
+  });
+}
+
+function pickStreamFormat(c: {
+  req: { header: (n: string) => string | undefined; query: (k: string) => string | undefined };
+}): "sse" | "ndjson" {
+  const explicit = c.req.query("format");
+  if (explicit === "ndjson") return "ndjson";
+  if (explicit === "sse") return "sse";
+  const accept = (c.req.header("accept") ?? "").toLowerCase();
+  if (accept.includes("application/x-ndjson") || accept.includes("application/json")) {
+    return "ndjson";
+  }
+  return "sse";
+}
+
+async function respondWithStream(
+  env: Env,
+  format: "sse" | "ndjson",
+  route: "binding" | "dynamic",
+  messages: ChatMessage[],
+  maxTokens: number,
+): Promise<Response> {
+  let upstream: ReadableStream<Uint8Array>;
+  try {
+    upstream = await streamAi(env, route, messages, maxTokens);
+  } catch (err) {
+    return Response.json(
+      {
+        ok: false,
+        route,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 },
+    );
+  }
+  const body = format === "ndjson" ? upstream.pipeThrough(sseToNdjson()) : upstream;
+  const headers: Record<string, string> = {
+    "cache-control": "no-cache",
+    "content-type":
+      format === "ndjson"
+        ? "application/x-ndjson; charset=utf-8"
+        : "text/event-stream; charset=utf-8",
+  };
+  if (format === "sse") headers["x-content-type-options"] = "nosniff";
+  return new Response(body, { headers });
+}
+
+app.get("/api/ai/stream", async (c) => {
+  const route = c.req.query("route") === "dynamic" ? "dynamic" : "binding";
+  const maxTokensRaw = Number.parseInt(c.req.query("maxTokens") ?? "", 10);
+  const maxTokens = Number.isFinite(maxTokensRaw) && maxTokensRaw > 0 ? maxTokensRaw : 128;
+  const prompt = c.req.query("prompt") ?? "Say hello in one short sentence.";
+  return respondWithStream(
+    c.env,
+    pickStreamFormat(c),
+    route,
+    [{ role: "user", content: prompt }],
+    maxTokens,
+  );
+});
+
+app.post("/api/ai/stream", async (c) => {
+  const body = await c.req
+    .json<{
+      prompt?: string;
+      messages?: ChatMessage[];
+      route?: "binding" | "dynamic";
+      maxTokens?: number;
+    }>()
+    .catch(() => ({}) as Record<string, never>);
+  const route = body.route === "dynamic" ? "dynamic" : "binding";
+  const maxTokens = typeof body.maxTokens === "number" ? body.maxTokens : 256;
+  const messages =
+    body.messages ?? (body.prompt ? [{ role: "user" as const, content: body.prompt }] : null);
+  if (!messages || messages.length === 0) {
+    return c.json({ error: "Provide `prompt` (string) or `messages` (array)" }, 400);
+  }
+  return respondWithStream(c.env, pickStreamFormat(c), route, messages, maxTokens);
+});
+
 app.get("/api/ai/ping", async (c) => {
   const route = c.req.query("route") === "dynamic" ? "dynamic" : "binding";
   const maxTokens = 64;
