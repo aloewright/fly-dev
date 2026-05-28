@@ -133,7 +133,10 @@
     {
       "class_name": "SandboxContainer",
       "image": "./container/Dockerfile",
-      "max_instances": 10
+      // standard-2 (1 vCPU / 6 GiB / 12 GB disk) — clone + node CLIs need more
+      // than the default lite (256 MiB / 2 GB). See SANDBOX_REVIEW.md §C item 7.
+      "instance_type": "standard-2",
+      "max_instances": 5
     }
   ],
   "vars": {
@@ -145,6 +148,7 @@
     "FIRECRAWL_WORKER_URL": "https://firecrawl-cf.lazee.workers.dev",
     "FLY_AUTH_ORIGIN": "https://fly.pm",
     "PLAYWRIGHT_WORKER_URL": "",
-    "REQUIRE_HUMAN_APPROVAL": "true"
+    "REQUIRE_HUMAN_APPROVAL": "true",
+    "GITHUB_APP_ID": ""
   }
 }

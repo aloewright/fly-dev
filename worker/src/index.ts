@@ -6,10 +6,11 @@ import { DurableObject, WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import { createAuth } from "./auth";
-import type { CurrentUser, Env, RunWorkflowParams, WorkQueueMessage } from "./env";
+import type { ContainerRunResult, CurrentUser, Env, RunWorkflowParams, WorkQueueMessage } from "./env";
 import { getCurrentUser, requireUser, verifyInternalRequest } from "./platform/auth-session";
 import {
   all,
+  ensureUser,
   first,
   getOverview,
   getProjects,
@@ -20,6 +21,7 @@ import {
 } from "./platform/data";
 import {
   createOAuthConnectUrl,
+  getDecryptedToken,
   handleOAuthCallback,
   storeWebhook,
   syncLinearProjectFromPayload,
@@ -31,10 +33,16 @@ import {
   cancelRun,
   createTaskRun,
   createTemplateApp,
+  markRunCompleted,
   markRunFailed,
   markRunStarted,
+  prepareRunCredentials,
+  resolveRunPlan,
   startRunWorkflow,
+  type CreateTaskPayload,
 } from "./platform/orchestration";
+import { writeBackToLinear } from "./platform/linear";
+import { dispatchFromGitHubWebhook, dispatchFromLinearWebhook } from "./platform/webhook-dispatch";
 import { redactSecrets } from "./platform/crypto";
 
 const app = new Hono<{ Bindings: Env; Variables: { user: CurrentUser | null } }>();
@@ -90,8 +98,14 @@ app.get("/api/projects", async (c) => {
 // `?route=dynamic` tries `dynamic/text_gen` to re-confirm the upstream
 // Worker-side bug and detect when it's fixed.
 const AI_TEST_MODEL = "@cf/openai/gpt-oss-120b";
+const AI_MAX_TOKENS_CAP = 2048;
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+function clampTokens(value: unknown, fallback: number): number {
+  const n = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.min(Math.max(1, Math.trunc(n)), AI_MAX_TOKENS_CAP);
+}
 
 async function runAi(
   env: Env,
@@ -152,7 +166,6 @@ function aiResponseEnvelope(args: {
           error: `Model returned no content (finish_reason=length). maxTokens=${args.maxTokens} was likely exhausted on reasoning_content. Try increasing maxTokens.`,
         }
       : {}),
-    response: args.raw,
   };
 }
 
@@ -296,9 +309,11 @@ async function respondWithStream(
 }
 
 app.get("/api/ai/stream", async (c) => {
+  const user = await requireUser(c.req.raw, c.env);
+  if (user instanceof Response) return user;
   const route = c.req.query("route") === "dynamic" ? "dynamic" : "binding";
   const maxTokensRaw = Number.parseInt(c.req.query("maxTokens") ?? "", 10);
-  const maxTokens = Number.isFinite(maxTokensRaw) && maxTokensRaw > 0 ? maxTokensRaw : 128;
+  const maxTokens = clampTokens(Number.isNaN(maxTokensRaw) ? undefined : maxTokensRaw, 128);
   const prompt = c.req.query("prompt") ?? "Say hello in one short sentence.";
   return respondWithStream(
     c.env,
@@ -310,6 +325,8 @@ app.get("/api/ai/stream", async (c) => {
 });
 
 app.post("/api/ai/stream", async (c) => {
+  const user = await requireUser(c.req.raw, c.env);
+  if (user instanceof Response) return user;
   const body = await c.req
     .json<{
       prompt?: string;
@@ -319,7 +336,7 @@ app.post("/api/ai/stream", async (c) => {
     }>()
     .catch(() => ({}) as Record<string, never>);
   const route = body.route === "dynamic" ? "dynamic" : "binding";
-  const maxTokens = typeof body.maxTokens === "number" ? body.maxTokens : 256;
+  const maxTokens = clampTokens(body.maxTokens, 256);
   const messages =
     body.messages ?? (body.prompt ? [{ role: "user" as const, content: body.prompt }] : null);
   if (!messages || messages.length === 0) {
@@ -329,6 +346,8 @@ app.post("/api/ai/stream", async (c) => {
 });
 
 app.get("/api/ai/ping", async (c) => {
+  const user = await requireUser(c.req.raw, c.env);
+  if (user instanceof Response) return user;
   const route = c.req.query("route") === "dynamic" ? "dynamic" : "binding";
   const maxTokens = 64;
   const startedAt = Date.now();
@@ -366,6 +385,8 @@ app.get("/api/ai/ping", async (c) => {
 });
 
 app.post("/api/ai/chat", async (c) => {
+  const user = await requireUser(c.req.raw, c.env);
+  if (user instanceof Response) return user;
   const body = await c.req
     .json<{
       prompt?: string;
@@ -375,7 +396,7 @@ app.post("/api/ai/chat", async (c) => {
     }>()
     .catch(() => ({}) as Record<string, never>);
   const route = body.route === "dynamic" ? "dynamic" : "binding";
-  const maxTokens = typeof body.maxTokens === "number" ? body.maxTokens : 256;
+  const maxTokens = clampTokens(body.maxTokens, 256);
   const messages =
     body.messages ?? (body.prompt ? [{ role: "user" as const, content: body.prompt }] : null);
   if (!messages || messages.length === 0) {
@@ -438,7 +459,11 @@ app.get("/api/runs/:id/events", async (c) => {
 app.post("/api/tasks", async (c) => {
   const user = await requireUser(c.req.raw, c.env);
   if (user instanceof Response) return user;
-  return createTaskRun(c.env, user, await c.req.json());
+  const payload = await c.req.json().catch(() => null);
+  if (!payload || typeof payload !== "object") {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+  return createTaskRun(c.env, user, payload as CreateTaskPayload);
 });
 
 app.post("/api/runs/:id/approve", async (c) => {
@@ -482,18 +507,39 @@ app.post("/api/webhooks/:provider", async (c) => {
   }
 
   const body = await c.req.text();
-  const signatureValid = await verifyWebhook(provider, c.req.raw, c.env, body);
-  const eventId =
-    c.req.header("x-github-delivery") ?? c.req.header("linear-delivery") ?? c.req.header("x-linear-delivery") ?? null;
-  const eventType = c.req.header("x-github-event") ?? c.req.header("linear-event") ?? null;
-  await storeWebhook(c.env, provider, body, signatureValid, eventId, eventType);
+  if (body.length > 1_000_000) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
 
+  // Verify the signature BEFORE persisting anything, so unauthenticated clients
+  // cannot write to the database. See SANDBOX_REVIEW.md A7.
+  const signatureValid = await verifyWebhook(provider, c.req.raw, c.env, body);
   if (!signatureValid) {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
+  const eventId =
+    c.req.header("x-github-delivery") ?? c.req.header("linear-delivery") ?? c.req.header("x-linear-delivery") ?? null;
+  const eventType = c.req.header("x-github-event") ?? c.req.header("linear-event") ?? null;
+
+  // Deduplicate retried deliveries; skip dispatch if already seen. See B4.
+  const { isNew } = await storeWebhook(c.env, provider, body, true, eventId, eventType);
+  if (!isNew) {
+    return c.json({ ok: true, duplicate: true });
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    return c.json({ ok: true, warning: "payload parse failed" });
+  }
+
   if (provider === "linear") {
-    await syncLinearProjectFromPayload(c.env, JSON.parse(body) as Record<string, unknown>);
+    await syncLinearProjectFromPayload(c.env, payload);
+    await dispatchFromLinearWebhook(c.env, payload);
+  } else {
+    await dispatchFromGitHubWebhook(c.env, payload);
   }
 
   return c.json({ ok: true });
@@ -502,7 +548,11 @@ app.post("/api/webhooks/:provider", async (c) => {
 app.post("/api/templates/apps", async (c) => {
   const user = await requireUser(c.req.raw, c.env);
   if (user instanceof Response) return user;
-  return createTemplateApp(c.env, user, await c.req.json());
+  const payload = await c.req.json().catch(() => null);
+  if (!payload || typeof payload !== "object") {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+  return createTemplateApp(c.env, user, payload);
 });
 
 app.get("/api/internal/status", async (c) => {
@@ -523,8 +573,10 @@ app.post("/api/internal/pages-deploy", async (c) => {
   if (!(await verifyInternalRequest(c.req.raw, c.env))) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  const body = (await c.req.json()) as { projectName?: string; branch?: string; artifactKey?: string };
-  if (!body.projectName) {
+  const body = (await c.req.json().catch(() => null)) as
+    | { projectName?: string; branch?: string; artifactKey?: string }
+    | null;
+  if (!body || !body.projectName) {
     return c.json({ error: "projectName is required" }, 400);
   }
   const eventId = id("deploy");
@@ -540,14 +592,20 @@ app.post("/api/internal/summon", async (c) => {
   if (!(await verifyInternalRequest(c.req.raw, c.env))) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  const localUser = await c.get("user") ?? {
-    id: "internal",
-    email: null,
-    name: "Fly Internal",
-    flyUserSlug: "internal",
-    authSource: "internal" as const,
-  };
-  return createTaskRun(c.env, localUser, await c.req.json());
+  const payload = await c.req.json().catch(() => null);
+  if (!payload || typeof payload !== "object") {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+  // Ensure the synthetic internal user exists (runs.user_id has an FK).
+  const localUser =
+    c.get("user") ??
+    (await ensureUser(c.env, {
+      email: null,
+      name: "Fly Internal",
+      flyUserSlug: "internal",
+      authSource: "internal",
+    }));
+  return createTaskRun(c.env, localUser, payload as CreateTaskPayload);
 });
 
 app.on(["GET", "POST"], "/api/auth/*", (c) => {
@@ -654,9 +712,13 @@ export class SandboxContainer extends Container<Env> {
   };
   entrypoint = ["node", "/app/server.mjs"];
   enableInternet = false;
+  // Egress allowlist. Per-run secrets travel in the /run request body, never in
+  // envVars (which are baked into the class definition). See SANDBOX_REVIEW.md S4/S6.
   allowedHosts = [
     "api.github.com",
     "github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
     "api.linear.app",
     "gateway.ai.cloudflare.com",
     "firecrawl-cf.lazee.workers.dev",
@@ -677,35 +739,118 @@ export class RunWorkflow extends WorkflowEntrypoint<Env, RunWorkflowParams> {
       return sandboxIdValue;
     });
 
+    const plan = await step.do("resolve run plan", async () => {
+      return resolveRunPlan(this.env, payload.runId);
+    });
+
+    if (!plan || !plan.repo) {
+      await step.do("abort: no repository", async () => {
+        await markRunFailed(
+          this.env,
+          payload.runId,
+          new Error(plan ? "No repository mapped to this run" : "Run not found"),
+        );
+      });
+      return { runId: payload.runId, sandboxId, status: "failed", reason: "no_repository" };
+    }
+    const repo = plan.repo;
+    const linearIssueId = plan.linearIssueId;
+
     await step.do("start sandbox container", async () => {
       const containerNamespace = this.env.SANDBOX_CONTAINER as unknown as DurableObjectNamespace<Container<Env>>;
       const container = getContainer(containerNamespace, sandboxId);
       await container.startAndWaitForPorts([8080], {
         instanceGetTimeoutMS: 30_000,
-        portReadyTimeoutMS: 30_000,
+        portReadyTimeoutMS: 60_000,
         waitInterval: 1_000,
       });
     });
 
-    await step.do("record handoff", async () => {
+    // Credentials are resolved and used inside this single step so they are
+    // never returned from a step (never persisted in Workflow storage). See S6.
+    const result = await step.do("dispatch to agent", async (): Promise<ContainerRunResult> => {
+      const creds = await prepareRunCredentials(this.env, plan);
+      if (!creds.githubToken) {
+        return { ok: false, error: "no_github_token" };
+      }
+      const containerNamespace = this.env.SANDBOX_CONTAINER as unknown as DurableObjectNamespace<Container<Env>>;
+      const container = getContainer(containerNamespace, sandboxId);
+      const response = await container.fetch(
+        new Request("http://sandbox.internal/run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            runId: payload.runId,
+            objective: plan.objective,
+            agentProvider: plan.agentProvider,
+            repo,
+            githubToken: creds.githubToken,
+            linearToken: creds.linearToken,
+            aiGateway: creds.aiGateway,
+          }),
+        }),
+      );
+      if (!response.ok) {
+        throw new Error(`Container /run returned HTTP ${response.status}`);
+      }
+      return (await response.json()) as ContainerRunResult;
+    });
+
+    await step.do("record agent result", async () => {
       await recordRunEvent(
         this.env,
         payload.runId,
-        "agent.handoff",
-        "Sandbox is ready for CLI agent execution. Human-safe v1 stops before mutating repositories.",
-        "info",
-        { objective: payload.objective },
+        "agent.result",
+        result.ok
+          ? `Agent completed. PR: ${result.prUrl ?? "(none)"}`
+          : `Agent finished without a PR: ${result.error ?? "unknown"}`,
+        result.ok ? "info" : "warn",
+        { prUrl: result.prUrl ?? null, branch: result.branch ?? null, prNumber: result.prNumber ?? null },
       );
       await recordUsage(this.env, payload.userId, "container_runtime", {
         runId: payload.runId,
-        projectId: payload.projectId,
+        projectId: plan.projectId ?? payload.projectId,
         quantity: 1,
         unit: "minute",
         provider: "cloudflare-containers",
       });
     });
 
-    return { runId: payload.runId, sandboxId, status: "ready_for_execution" };
+    if (result.ok && linearIssueId) {
+      await step.do("linear write-back", async () => {
+        const linearToken = await getDecryptedToken(this.env, plan.userId, "linear");
+        if (!linearToken) {
+          await recordRunEvent(this.env, payload.runId, "linear.skipped", "No Linear token; skipping write-back.", "warn");
+          return;
+        }
+        await writeBackToLinear(linearToken, {
+          issueId: linearIssueId,
+          teamId: plan.linearTeamId,
+          prUrl: result.prUrl ?? null,
+          summary: result.summary ?? "",
+        });
+        await recordRunEvent(this.env, payload.runId, "linear.updated", "Linear issue updated with PR + status.", "info");
+      });
+    }
+
+    await step.do("mark run done", async () => {
+      if (result.ok) {
+        await markRunCompleted(this.env, payload.runId, {
+          prUrl: result.prUrl,
+          commitSha: result.commitSha,
+          branchName: result.branch,
+        });
+      } else {
+        await markRunFailed(this.env, payload.runId, new Error(result.error ?? "Agent produced no changes"));
+      }
+    });
+
+    return {
+      runId: payload.runId,
+      sandboxId,
+      status: result.ok ? "completed" : "failed",
+      prUrl: result.prUrl ?? null,
+    };
   }
 }
 
@@ -733,6 +878,10 @@ export default {
             projectId: message.body.projectId,
             objective: run?.objective ?? "Continue queued fly-dev run",
           });
+          message.ack();
+        } else {
+          // Unknown action: ack so it does not loop to the DLQ. See SANDBOX_REVIEW.md B5.
+          console.warn("Unhandled queue action", message.body.action);
           message.ack();
         }
       } catch (error) {

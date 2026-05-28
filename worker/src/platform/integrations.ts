@@ -1,6 +1,6 @@
 /* AGPL-3.0-or-later */
 import type { CurrentUser, Env } from "../env";
-import { encryptText, hmacHex, timingSafeEqual } from "./crypto";
+import { decryptText, encryptText, hmacHex, timingSafeEqual } from "./crypto";
 import { all, first, id, runSql } from "./data";
 import {
   extractGitHubReposFromText,
@@ -69,6 +69,15 @@ export async function handleOAuthCallback(
     return Response.json({ error: "Invalid or expired OAuth state" }, { status: 400 });
   }
 
+  // Fail fast rather than silently storing NULL tokens when the key is missing.
+  // See SANDBOX_REVIEW.md A6.
+  if (!env.TOKEN_ENCRYPTION_KEY) {
+    return Response.json(
+      { error: "TOKEN_ENCRYPTION_KEY is not configured; cannot store OAuth tokens" },
+      { status: 500 },
+    );
+  }
+
   const redirectUri = stateRecord.redirectUri;
   const token = provider === "github"
     ? await exchangeGitHubCode(env, code, redirectUri)
@@ -131,6 +140,10 @@ export async function verifyWebhook(
   return timingSafeEqual(signature.replace(/^sha256=/, ""), expected);
 }
 
+// Persist a webhook delivery. Uses INSERT OR IGNORE against the
+// UNIQUE(provider, event_id) index (migration 0002) so retried deliveries are
+// deduplicated. Returns isNew=false when the delivery was a duplicate so the
+// caller can skip re-dispatching a run. See SANDBOX_REVIEW.md B4.
 export async function storeWebhook(
   env: Env,
   provider: OAuthProvider,
@@ -138,14 +151,15 @@ export async function storeWebhook(
   signatureValid: boolean,
   eventId: string | null,
   eventType: string | null,
-): Promise<void> {
-  await runSql(
-    env,
-    `INSERT INTO webhook_events
+): Promise<{ isNew: boolean }> {
+  const result = await env.DB.prepare(
+    `INSERT OR IGNORE INTO webhook_events
        (id, provider, event_id, event_type, signature_valid, payload_json, processed_at)
      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-    [id("webhook"), provider, eventId, eventType, signatureValid ? 1 : 0, body],
-  );
+  )
+    .bind(id("webhook"), provider, eventId, eventType, signatureValid ? 1 : 0, body)
+    .run();
+  return { isNew: Boolean(result.meta.changes) };
 }
 
 export async function syncLinearProjectFromPayload(
@@ -363,6 +377,20 @@ export async function getConnectedToken(env: Env, userId: string, provider: OAut
      WHERE user_id = ? AND provider = ? AND status = 'connected'`,
     [userId, provider],
   );
+}
+
+// Decrypt a stored provider token for use inside a Workflow step. The plaintext
+// must never be returned from a step or logged. See SANDBOX_REVIEW.md S6.
+export async function getDecryptedToken(
+  env: Env,
+  userId: string,
+  provider: OAuthProvider,
+): Promise<string | null> {
+  const row = await getConnectedToken(env, userId, provider);
+  if (!row?.access_token_encrypted) {
+    return null;
+  }
+  return decryptText(row.access_token_encrypted, env.TOKEN_ENCRYPTION_KEY);
 }
 
 export async function listKnownConnections(env: Env, userId: string) {

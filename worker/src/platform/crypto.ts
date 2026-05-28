@@ -32,7 +32,8 @@ export async function encryptText(value: string, secret?: string): Promise<strin
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await keyFromSecret(secret);
   const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, textEncoder.encode(value));
-  return `${toBase64(iv)}.${toBase64(new Uint8Array(encrypted))}`;
+  // Version prefix so the key can be rotated without breaking existing ciphertexts.
+  return `v1.${toBase64(iv)}.${toBase64(new Uint8Array(encrypted))}`;
 }
 
 export async function decryptText(value: string | null, secret?: string): Promise<string | null> {
@@ -40,7 +41,10 @@ export async function decryptText(value: string | null, secret?: string): Promis
     return null;
   }
 
-  const [ivPart, cipherPart] = value.split(".");
+  // Supports both legacy "<iv>.<cipher>" and versioned "v1.<iv>.<cipher>".
+  const segments = value.split(".");
+  const ivPart = segments.length === 3 ? segments[1] : segments[0];
+  const cipherPart = segments.length === 3 ? segments[2] : segments[1];
   if (!ivPart || !cipherPart) {
     return null;
   }

@@ -337,7 +337,11 @@ export async function recordUsage(
 }
 
 function isMissingTableError(error: unknown): boolean {
-  return error instanceof Error && /no such table|D1_ERROR/i.test(error.message);
+  // Only tolerate a genuinely-absent table (first boot before migrations run).
+  // "D1_ERROR" is D1's generic prefix on nearly all runtime errors (constraint,
+  // type, SQL), so matching it would silently swallow real write failures.
+  // See SANDBOX_REVIEW.md B1.
+  return error instanceof Error && /no such table/i.test(error.message);
 }
 
 function defaultConnections(): ConnectionSummary[] {

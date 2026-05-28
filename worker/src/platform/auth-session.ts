@@ -12,30 +12,31 @@ type BetterAuthSession = {
   };
 };
 
+const SIGNATURE_WINDOW_MS = 5 * 60 * 1000;
+
 export async function getCurrentUser(request: Request, env: Env): Promise<CurrentUser | null> {
   const betterAuthUser = await getBetterAuthUser(request, env);
   if (betterAuthUser) {
     return ensureUser(env, betterAuthUser);
   }
 
-  const flySlug = request.headers.get("x-fly-user") ?? cookie(request, "fly_user");
-  if (flySlug) {
+  // Trusted-proxy identity (e.g. fly.pm SSO). dev.fly.pm is a public custom
+  // domain, so raw x-fly-* headers are forgeable. They are only honored when
+  // accompanied by a valid HMAC signature from the trusted proxy (shared
+  // INTERNAL_API_SECRET). See SANDBOX_REVIEW.md A1.
+  const flyIdentity = await verifyFlyIdentity(request, env);
+  if (flyIdentity) {
     return ensureUser(env, {
-      email: request.headers.get("x-fly-email"),
-      name: request.headers.get("x-fly-name"),
-      flyUserSlug: slugify(flySlug),
+      email: flyIdentity.email,
+      name: flyIdentity.name,
+      flyUserSlug: slugify(flyIdentity.user),
       authSource: "fly",
     });
   }
 
-  const hostname = new URL(request.url).hostname;
-  const hostHeader = request.headers.get("host") ?? "";
-  if (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostHeader.startsWith("localhost:") ||
-    hostHeader.startsWith("127.0.0.1:")
-  ) {
+  // Local-development convenience only — never trusted in production. Gated on
+  // APP_ENV, not on the caller-controlled Host header. See SANDBOX_REVIEW.md A3.
+  if (env.APP_ENV !== "production" && isLocalRequest(request)) {
     return ensureUser(env, {
       email: "local@dev.fly.pm",
       name: "Local Dev",
@@ -55,25 +56,50 @@ export async function requireUser(request: Request, env: Env): Promise<Response 
   return user;
 }
 
+// Internal-only routes are authenticated with an HMAC signature over the request
+// body. The previously-trusted cf-access-authenticated-user-email header was
+// removed because it is forgeable on a public route with no Access policy in
+// front of it (SANDBOX_REVIEW.md A2). To re-introduce Cloudflare Access, validate
+// the cf-access-jwt-assertion JWT against the Access JWKS endpoint instead.
 export async function verifyInternalRequest(request: Request, env: Env): Promise<boolean> {
-  const accessEmail = request.headers.get("cf-access-authenticated-user-email");
-  if (accessEmail) {
-    return true;
-  }
-
-  if (!env.INTERNAL_API_SECRET && env.APP_ENV !== "production") {
-    return true;
+  if (!env.INTERNAL_API_SECRET) {
+    // Fail closed in production; allow unsigned internal calls only in dev.
+    return env.APP_ENV !== "production";
   }
 
   const signature = request.headers.get("x-fly-signature");
   const timestamp = request.headers.get("x-fly-timestamp");
-  if (!env.INTERNAL_API_SECRET || !signature || !timestamp) {
+  if (!signature || !timestamp || !isFreshTimestamp(timestamp)) {
     return false;
   }
 
   const body = request.method === "GET" ? "" : await request.clone().text();
   const expected = await hmacHex(env.INTERNAL_API_SECRET, `${timestamp}.${body}`);
   return timingSafeEqual(signature.replace(/^sha256=/, ""), expected);
+}
+
+async function verifyFlyIdentity(
+  request: Request,
+  env: Env,
+): Promise<{ user: string; email: string | null; name: string | null } | null> {
+  const flyUser = request.headers.get("x-fly-user");
+  const timestamp = request.headers.get("x-fly-timestamp");
+  const signature = request.headers.get("x-fly-signature");
+  if (!flyUser || !timestamp || !signature || !env.INTERNAL_API_SECRET) {
+    return null;
+  }
+  if (!isFreshTimestamp(timestamp)) {
+    return null;
+  }
+  const expected = await hmacHex(env.INTERNAL_API_SECRET, `${timestamp}.${flyUser}`);
+  if (!timingSafeEqual(signature.replace(/^sha256=/, ""), expected)) {
+    return null;
+  }
+  return {
+    user: flyUser,
+    email: request.headers.get("x-fly-email"),
+    name: request.headers.get("x-fly-name"),
+  };
 }
 
 async function getBetterAuthUser(request: Request, env: Env): Promise<Omit<CurrentUser, "id"> | null> {
@@ -90,30 +116,27 @@ async function getBetterAuthUser(request: Request, env: Env): Promise<Omit<Curre
     return {
       email: session.user.email ?? null,
       name: session.user.name ?? null,
-      flyUserSlug: slugify(session.user.email ?? session.user.id),
+      // Key on the stable Better Auth user id to avoid slug collisions between
+      // different emails that normalize to the same value. See SANDBOX_REVIEW.md A5.
+      flyUserSlug: `ba-${session.user.id}`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 64),
       authSource: "better-auth",
     };
   } catch (error) {
-    if (error instanceof Error && /no such table|D1_ERROR/i.test(error.message)) {
+    if (error instanceof Error && /no such table/i.test(error.message)) {
       return null;
     }
     throw error;
   }
 }
 
-function cookie(request: Request, name: string): string | null {
-  const header = request.headers.get("cookie");
-  if (!header) {
-    return null;
-  }
+function isFreshTimestamp(timestamp: string): boolean {
+  const ts = Number(timestamp);
+  return Number.isFinite(ts) && Math.abs(Date.now() - ts) <= SIGNATURE_WINDOW_MS;
+}
 
-  for (const part of header.split(";")) {
-    const [key, value] = part.trim().split("=");
-    if (key === name && value) {
-      return decodeURIComponent(value);
-    }
-  }
-  return null;
+function isLocalRequest(request: Request): boolean {
+  const hostname = new URL(request.url).hostname;
+  return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
 function slugify(value: string): string {

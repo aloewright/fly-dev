@@ -13,6 +13,28 @@ export type RunWorkflowParams = {
   objective: string;
 };
 
+// Repository coordinates resolved for a run (non-secret).
+export type RunRepoCoords = {
+  owner: string;
+  repo: string;
+  baseBranch: string;
+  url: string;
+};
+
+// Structured result returned by the in-container agent runner (container/server.mjs).
+// Must never contain secrets — it is persisted in Workflow step state.
+export type ContainerRunResult = {
+  ok: boolean;
+  prUrl?: string | null;
+  prNumber?: number | null;
+  branch?: string | null;
+  commitSha?: string | null;
+  diff?: string | null;
+  summary?: string | null;
+  logs?: string | null;
+  error?: string | null;
+};
+
 export type Env = {
   ASSETS: Fetcher;
   DB: D1Database;
@@ -38,17 +60,20 @@ export type Env = {
   FLY_AUTH_ORIGIN: string;
   PLAYWRIGHT_WORKER_URL: string;
   REQUIRE_HUMAN_APPROVAL: string;
+  GITHUB_APP_ID?: string;
   BETTER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;
   INTERNAL_API_SECRET?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   GITHUB_WEBHOOK_SECRET?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
   LINEAR_CLIENT_ID?: string;
   LINEAR_CLIENT_SECRET?: string;
   LINEAR_WEBHOOK_SECRET?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  CF_AIG_TOKEN?: string;
 };
 
 export type CurrentUser = {
