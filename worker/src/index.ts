@@ -179,9 +179,32 @@ async function streamAi(
   )) as ReadableStream<Uint8Array>;
 }
 
+// Different models stream their visible output in different delta fields:
+//   gpt-oss-120b (binding route): `delta.reasoning_content` (internal trace,
+//     useful for debugging) then `delta.content` (final answer).
+//   gemma via dynamic route:      `delta.reasoning` is the *only* output
+//     channel — there's no separate `delta.content`.
+// Pick whichever non-null text channel a chunk carries and tag it with `kind`
+// so the consumer can filter (`kind === "content"` for clean OpenAI output,
+// include "reasoning" if you want everything).
+function extractDelta(delta: unknown): {
+  text: string | null;
+  kind: "content" | "reasoning" | null;
+} {
+  if (!delta || typeof delta !== "object") return { text: null, kind: null };
+  const d = delta as Record<string, unknown>;
+  if (typeof d.content === "string") return { text: d.content, kind: "content" };
+  if (typeof d.reasoning === "string") return { text: d.reasoning, kind: "reasoning" };
+  if (typeof d.reasoning_content === "string") {
+    return { text: d.reasoning_content, kind: "reasoning" };
+  }
+  return { text: null, kind: null };
+}
+
 // Re-wrap OpenAI-compatible SSE chunks (`data: {...}\n\ndata: [DONE]\n\n`)
-// as line-delimited JSON: `{"delta":"...","finishReason":null,"done":false}\n`
-// per chunk, terminated by `{"done":true}\n`.
+// as line-delimited JSON: `{"delta":"...","kind":"content","finishReason":null,"done":false}\n`
+// per chunk, terminated by `{"done":true}\n`. `kind` distinguishes
+// user-visible content from internal reasoning traces.
 function sseToNdjson(): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -203,16 +226,15 @@ function sseToNdjson(): TransformStream<Uint8Array, Uint8Array> {
         }
         try {
           const evt = JSON.parse(payload) as {
-            choices?: Array<{
-              delta?: { content?: string | null };
-              finish_reason?: string | null;
-            }>;
+            choices?: Array<{ delta?: unknown; finish_reason?: string | null }>;
           };
-          const delta = evt.choices?.[0]?.delta?.content ?? null;
+          const { text, kind } = extractDelta(evt.choices?.[0]?.delta);
           const finishReason = evt.choices?.[0]?.finish_reason ?? null;
-          if (delta !== null || finishReason !== null) {
+          if (text !== null || finishReason !== null) {
             controller.enqueue(
-              encoder.encode(JSON.stringify({ delta, finishReason, done: false }) + "\n"),
+              encoder.encode(
+                JSON.stringify({ delta: text, kind, finishReason, done: false }) + "\n",
+              ),
             );
           }
         } catch {
