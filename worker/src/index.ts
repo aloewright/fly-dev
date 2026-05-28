@@ -84,6 +84,89 @@ app.get("/api/projects", async (c) => {
   return c.json({ projects: await getProjects(c.env) });
 });
 
+// AI Gateway smoke test endpoints.
+// `?route=binding` (default) uses the sanctioned working pattern from
+// ~/.claude/CLAUDE.md: env.AI.run("@cf/<model>", ..., { gateway: { id } }).
+// `?route=dynamic` tries `dynamic/text_gen` to re-confirm the upstream
+// Worker-side bug and detect when it's fixed.
+const AI_TEST_MODEL = "@cf/openai/gpt-oss-120b";
+
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+async function runAi(
+  env: Env,
+  route: "binding" | "dynamic",
+  messages: ChatMessage[],
+  maxTokens: number,
+) {
+  const gatewayId = env.AI_GATEWAY_ID || "x";
+  const model = route === "dynamic" ? "dynamic/text_gen" : AI_TEST_MODEL;
+  const raw = await (env.AI as unknown as {
+    run: (m: string, i: unknown, o: { gateway: { id: string } }) => Promise<unknown>;
+  }).run(model, { messages, max_tokens: maxTokens }, { gateway: { id: gatewayId } });
+  return { gatewayId, model, raw };
+}
+
+app.get("/api/ai/ping", async (c) => {
+  const route = c.req.query("route") === "dynamic" ? "dynamic" : "binding";
+  const startedAt = Date.now();
+  try {
+    const { gatewayId, model, raw } = await runAi(
+      c.env,
+      route,
+      [
+        { role: "system", content: "Reply with exactly the single word: pong" },
+        { role: "user", content: "ping" },
+      ],
+      64,
+    );
+    return c.json({ ok: true, route, model, gatewayId, ms: Date.now() - startedAt, response: raw });
+  } catch (err) {
+    return c.json(
+      {
+        ok: false,
+        route,
+        ms: Date.now() - startedAt,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
+  }
+});
+
+app.post("/api/ai/chat", async (c) => {
+  const body = await c.req
+    .json<{
+      prompt?: string;
+      messages?: ChatMessage[];
+      route?: "binding" | "dynamic";
+      maxTokens?: number;
+    }>()
+    .catch(() => ({}) as Record<string, never>);
+  const route = body.route === "dynamic" ? "dynamic" : "binding";
+  const maxTokens = typeof body.maxTokens === "number" ? body.maxTokens : 256;
+  const messages =
+    body.messages ?? (body.prompt ? [{ role: "user" as const, content: body.prompt }] : null);
+  if (!messages || messages.length === 0) {
+    return c.json({ error: "Provide `prompt` (string) or `messages` (array)" }, 400);
+  }
+  const startedAt = Date.now();
+  try {
+    const { gatewayId, model, raw } = await runAi(c.env, route, messages, maxTokens);
+    return c.json({ ok: true, route, model, gatewayId, ms: Date.now() - startedAt, response: raw });
+  } catch (err) {
+    return c.json(
+      {
+        ok: false,
+        route,
+        ms: Date.now() - startedAt,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
+  }
+});
+
 app.get("/api/projects/:id/runs", async (c) => {
   const user = await requireUser(c.req.raw, c.env);
   if (user instanceof Response) return user;
