@@ -107,8 +107,58 @@ async function runAi(
   return { gatewayId, model, raw };
 }
 
+function summarizeAiResponse(raw: unknown): {
+  content: string | null;
+  finishReason: string | null;
+} {
+  const r = raw as {
+    choices?: Array<{
+      message?: { content?: string | null };
+      finish_reason?: string | null;
+    }>;
+  };
+  const choice = r?.choices?.[0];
+  return {
+    content: choice?.message?.content ?? null,
+    finishReason: choice?.finish_reason ?? null,
+  };
+}
+
+// Reasoning models (e.g. gpt-oss-120b) spend tokens on `reasoning_content`
+// before emitting `content`. If the budget runs out mid-reasoning, the gateway
+// call still succeeds (200) but `content` is null. Signal that to the caller
+// as ok:false with a 200 (transport succeeded) so it's distinguishable from a
+// thrown gateway error (500).
+function aiResponseEnvelope(args: {
+  route: "binding" | "dynamic";
+  model: string;
+  gatewayId: string;
+  ms: number;
+  maxTokens: number;
+  raw: unknown;
+}) {
+  const { content, finishReason } = summarizeAiResponse(args.raw);
+  const incomplete = (content === null || content === "") && finishReason === "length";
+  return {
+    ok: !incomplete,
+    route: args.route,
+    model: args.model,
+    gatewayId: args.gatewayId,
+    ms: args.ms,
+    content,
+    finishReason,
+    ...(incomplete
+      ? {
+          error: `Model returned no content (finish_reason=length). maxTokens=${args.maxTokens} was likely exhausted on reasoning_content. Try increasing maxTokens.`,
+        }
+      : {}),
+    response: args.raw,
+  };
+}
+
 app.get("/api/ai/ping", async (c) => {
   const route = c.req.query("route") === "dynamic" ? "dynamic" : "binding";
+  const maxTokens = 64;
   const startedAt = Date.now();
   try {
     const { gatewayId, model, raw } = await runAi(
@@ -118,9 +168,18 @@ app.get("/api/ai/ping", async (c) => {
         { role: "system", content: "Reply with exactly the single word: pong" },
         { role: "user", content: "ping" },
       ],
-      64,
+      maxTokens,
     );
-    return c.json({ ok: true, route, model, gatewayId, ms: Date.now() - startedAt, response: raw });
+    return c.json(
+      aiResponseEnvelope({
+        route,
+        model,
+        gatewayId,
+        ms: Date.now() - startedAt,
+        maxTokens,
+        raw,
+      }),
+    );
   } catch (err) {
     return c.json(
       {
@@ -153,7 +212,16 @@ app.post("/api/ai/chat", async (c) => {
   const startedAt = Date.now();
   try {
     const { gatewayId, model, raw } = await runAi(c.env, route, messages, maxTokens);
-    return c.json({ ok: true, route, model, gatewayId, ms: Date.now() - startedAt, response: raw });
+    return c.json(
+      aiResponseEnvelope({
+        route,
+        model,
+        gatewayId,
+        ms: Date.now() - startedAt,
+        maxTokens,
+        raw,
+      }),
+    );
   } catch (err) {
     return c.json(
       {
