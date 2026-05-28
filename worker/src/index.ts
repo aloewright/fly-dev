@@ -714,6 +714,11 @@ export class SandboxContainer extends Container<Env> {
   enableInternet = false;
   // Egress allowlist. Per-run secrets travel in the /run request body, never in
   // envVars (which are baked into the class definition). See SANDBOX_REVIEW.md S4/S6.
+  // NOTE: the package-registry hosts below are required by the test gate
+  // (npm/pip/go installs). This widens the egress surface — a malicious repo's
+  // install scripts run here. Repos depending on registries NOT listed (private
+  // registries, arbitrary git deps) will fail to install; flip enableInternet to
+  // true only if you accept fully open egress from the sandbox.
   allowedHosts = [
     "api.github.com",
     "github.com",
@@ -722,6 +727,12 @@ export class SandboxContainer extends Container<Env> {
     "api.linear.app",
     "gateway.ai.cloudflare.com",
     "firecrawl-cf.lazee.workers.dev",
+    // Package registries for the test gate.
+    "registry.npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "proxy.golang.org",
+    "sum.golang.org",
   ];
   pingEndpoint = "localhost:8080/ready";
 }
@@ -797,15 +808,27 @@ export class RunWorkflow extends WorkflowEntrypoint<Env, RunWorkflowParams> {
     });
 
     await step.do("record agent result", async () => {
+      const testNote = result.testsRun
+        ? ` · tests ${result.testsPassed ? "passed" : "failed"}`
+        : "";
       await recordRunEvent(
         this.env,
         payload.runId,
         "agent.result",
         result.ok
-          ? `Agent completed. PR: ${result.prUrl ?? "(none)"}`
-          : `Agent finished without a PR: ${result.error ?? "unknown"}`,
+          ? `Agent completed. PR: ${result.prUrl ?? "(none)"}${result.prDraft ? " (draft)" : ""}${testNote}`
+          : `Agent finished without a PR: ${result.error ?? "unknown"}${testNote}`,
         result.ok ? "info" : "warn",
-        { prUrl: result.prUrl ?? null, branch: result.branch ?? null, prNumber: result.prNumber ?? null },
+        {
+          prUrl: result.prUrl ?? null,
+          prDraft: result.prDraft ?? null,
+          branch: result.branch ?? null,
+          prNumber: result.prNumber ?? null,
+          testsRun: result.testsRun ?? null,
+          testsPassed: result.testsPassed ?? null,
+          testExitCode: result.testExitCode ?? null,
+          projectType: result.projectType ?? null,
+        },
       );
       await recordUsage(this.env, payload.userId, "container_runtime", {
         runId: payload.runId,

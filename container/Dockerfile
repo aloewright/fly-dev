@@ -4,10 +4,31 @@ FROM node:22-slim
 ENV NODE_ENV=production
 ENV PORT=8080
 
-# git + TLS roots are required to clone over HTTPS; node:22-slim ships neither.
+# Toolchains for the test gate: git + TLS roots (clone), python3/pip, Go
+# (installed below), and a C/C++ toolchain (build-essential + python3-dev) so
+# native deps build — node-gyp modules, Python C extensions, cgo. node:22-slim
+# ships none of these.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates \
+  && apt-get install -y --no-install-recommends \
+       git ca-certificates curl \
+       build-essential \
+       python3 python3-pip python3-venv python3-dev \
   && rm -rf /var/lib/apt/lists/*
+
+# Go toolchain (arch-matched to the build platform). GOTOOLCHAIN=local pins to
+# this version so a repo's go.mod cannot trigger an out-of-band toolchain
+# download at test time.
+ARG GO_VERSION=1.23.4
+RUN ARCH="$(dpkg --print-architecture)" \
+  && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tgz \
+  && tar -C /usr/local -xzf /tmp/go.tgz \
+  && rm /tmp/go.tgz
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOTOOLCHAIN=local
+
+# pytest system-wide so `python3 -m pytest` works even when a repo does not list
+# it as a dependency. Repo deps install per-run with `pip install --user`.
+RUN python3 -m pip install --no-cache-dir --break-system-packages pytest
 
 # Pin these in production for reproducible, supply-chain-reviewed builds
 # (override with --build-arg). See SANDBOX_REVIEW.md (sandbox findings).
@@ -25,6 +46,8 @@ COPY --chown=sandbox:sandbox server.mjs /app/server.mjs
 USER sandbox
 WORKDIR /home/sandbox
 ENV HOME=/home/sandbox
+ENV GOPATH=/home/sandbox/go
+ENV GOCACHE=/home/sandbox/.cache/go-build
 
 EXPOSE 8080
 CMD ["node", "/app/server.mjs"]

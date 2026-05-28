@@ -1,19 +1,22 @@
 /* AGPL-3.0-or-later */
 // In-sandbox agent runner. Receives a per-run job over POST /run (objective,
 // repo, ephemeral tokens, AI Gateway config), clones the repo, runs the coding
-// agent (claude-code / codex) routed through the AI Gateway, opens a PR, and
-// returns a structured result. Secrets arrive only in the request body and are
-// passed to the agent subprocess as env vars — never baked into the image.
-// See SANDBOX_REVIEW.md §4.
+// agent (claude-code / codex) routed through the AI Gateway, runs the project's
+// test suite (test gate), and opens a PR — a draft if tests fail. Secrets arrive
+// only in the request body and are passed to the agent subprocess as env vars,
+// never baked into the image. See SANDBOX_REVIEW.md §4.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const AGENT_TIMEOUT_MS = 8 * 60 * 1000;
 const GIT_TIMEOUT_MS = 2 * 60 * 1000;
+const INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
+const TEST_TIMEOUT_MS = 5 * 60 * 1000;
 
 function sendJson(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -24,6 +27,10 @@ async function readBody(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function tail(text, n = 3000) {
+  return (text || "").slice(-n);
 }
 
 function exec(cmd, args, opts = {}) {
@@ -80,7 +87,109 @@ function agentCommand(job) {
   };
 }
 
-async function openPullRequest(job, head, base, title, summary) {
+// Detect how to install + test the project. Returns null for unknown types, and
+// test:null when a recognized type has no usable test harness.
+function detectTestPlan(repoDir) {
+  if (existsSync(path.join(repoDir, "package.json"))) {
+    let scripts = {};
+    try {
+      scripts = JSON.parse(readFileSync(path.join(repoDir, "package.json"), "utf8")).scripts ?? {};
+    } catch {
+      scripts = {};
+    }
+    if (!scripts.test) {
+      return { projectType: "nodejs", install: null, test: null, reason: "no test script in package.json" };
+    }
+    return {
+      projectType: "nodejs",
+      install: ["npm", ["install", "--no-audit", "--no-fund"]],
+      test: ["npm", ["test"]],
+    };
+  }
+  if (existsSync(path.join(repoDir, "go.mod"))) {
+    return { projectType: "go", install: ["go", ["mod", "download"]], test: ["go", ["test", "./..."]] };
+  }
+  if (existsSync(path.join(repoDir, "requirements.txt"))) {
+    return {
+      projectType: "python",
+      install: ["python3", ["-m", "pip", "install", "--user", "--break-system-packages", "-r", "requirements.txt"]],
+      test: ["python3", ["-m", "pytest"]],
+    };
+  }
+  if (existsSync(path.join(repoDir, "pyproject.toml"))) {
+    return {
+      projectType: "python",
+      install: ["python3", ["-m", "pip", "install", "--user", "--break-system-packages", "-e", "."]],
+      test: ["python3", ["-m", "pytest"]],
+    };
+  }
+  if (existsSync(path.join(repoDir, "Cargo.toml"))) {
+    return { projectType: "rust", install: ["cargo", ["fetch"]], test: ["cargo", ["test"]] };
+  }
+  return null;
+}
+
+function toolMissing(result) {
+  return result.code === -1 && /ENOENT|not found/i.test(result.stderr);
+}
+
+// Run install + tests against the (already-committed) working tree. Never throws;
+// returns a structured verdict. ran=false means "couldn't/needn't run" (no harness
+// or toolchain) and is treated as non-blocking.
+async function runTestGate(repoDir) {
+  const plan = detectTestPlan(repoDir);
+  if (!plan) {
+    return { ran: false, projectType: "unknown", summary: "No recognized project type; tests skipped." };
+  }
+  if (!plan.test) {
+    return { ran: false, projectType: plan.projectType, summary: `Tests skipped: ${plan.reason}.` };
+  }
+
+  if (plan.install) {
+    const install = await exec(plan.install[0], plan.install[1], { cwd: repoDir, timeoutMs: INSTALL_TIMEOUT_MS });
+    if (toolMissing(install)) {
+      return {
+        ran: false,
+        projectType: plan.projectType,
+        summary: `Tests skipped: "${plan.install[0]}" not available in sandbox.`,
+      };
+    }
+    if (install.code !== 0) {
+      return {
+        ran: true,
+        passed: false,
+        exitCode: install.code,
+        projectType: plan.projectType,
+        summary: `Dependency install failed (exit ${install.code}).\n${tail(install.stderr || install.stdout)}`,
+      };
+    }
+  }
+
+  const test = await exec(plan.test[0], plan.test[1], { cwd: repoDir, timeoutMs: TEST_TIMEOUT_MS });
+  if (toolMissing(test)) {
+    return {
+      ran: false,
+      projectType: plan.projectType,
+      summary: `Tests skipped: "${plan.test[0]}" not available in sandbox.`,
+    };
+  }
+  return {
+    ran: true,
+    passed: test.code === 0,
+    exitCode: test.code,
+    projectType: plan.projectType,
+    summary: tail(`${test.stdout || ""}${test.stderr ? `\n${test.stderr}` : ""}`),
+  };
+}
+
+function testStatusLine(gate) {
+  if (!gate.ran) return `⚠️ ${gate.summary}`;
+  return gate.passed
+    ? `✅ Tests passed (${gate.projectType})`
+    : `❌ Tests failed (${gate.projectType}, exit ${gate.exitCode})`;
+}
+
+async function openPullRequest(job, head, base, title, body, draft) {
   const res = await fetch(`https://api.github.com/repos/${job.repo.owner}/${job.repo.repo}/pulls`, {
     method: "POST",
     headers: {
@@ -90,12 +199,7 @@ async function openPullRequest(job, head, base, title, summary) {
       "content-type": "application/json",
       "x-github-api-version": "2022-11-28",
     },
-    body: JSON.stringify({
-      title,
-      head,
-      base,
-      body: `## Summary\n\n${summary || "_(no summary)_"}\n\n---\n_Opened automatically by fly-dev run ${job.runId}._`,
-    }),
+    body: JSON.stringify({ title, head, base, body, draft }),
   });
   if (!res.ok) {
     return { ok: false, status: res.status, text: (await res.text()).slice(0, 500) };
@@ -149,6 +253,8 @@ async function handleRun(rawBody) {
       return { ok: false, error: "no_changes", summary, logs };
     }
 
+    // Commit the agent's changes BEFORE install/test so install artifacts
+    // (e.g. node_modules) are never added to the commit.
     await exec("git", ["add", "-A"], { cwd: repoDir });
     const title = `feat: ${job.objective}`.slice(0, 72);
     const commit = await exec(
@@ -159,6 +265,11 @@ async function handleRun(rawBody) {
     if (commit.code !== 0) {
       return { ok: false, error: "commit_failed", logs: commit.stderr.slice(-2000), summary };
     }
+
+    // Test gate: install deps + run the suite. A failing suite does not block the
+    // PR — it opens it as a draft so a human reviews. See SANDBOX_REVIEW.md test gate.
+    const gate = await runTestGate(repoDir);
+    const draft = gate.ran === true && gate.passed === false;
 
     const push = await exec("git", ["push", "origin", branch], { cwd: repoDir, timeoutMs: GIT_TIMEOUT_MS });
     if (push.code !== 0) {
@@ -171,7 +282,13 @@ async function handleRun(rawBody) {
       await exec("git", ["diff", `${baseBranch}...${branch}`], { cwd: repoDir, timeoutMs: 30_000 })
     ).stdout.slice(0, 50_000);
 
-    const pr = await openPullRequest(job, branch, baseBranch, title, summary);
+    const prBody =
+      `## Summary\n\n${summary || "_(no summary)_"}\n\n` +
+      `## Tests\n\n${testStatusLine(gate)}\n\n` +
+      (gate.ran ? `\`\`\`\n${tail(gate.summary, 1500)}\n\`\`\`\n\n` : "") +
+      `---\n_Opened automatically by fly-dev run ${job.runId}._`;
+
+    const pr = await openPullRequest(job, branch, baseBranch, title, prBody, draft);
     if (!pr.ok) {
       return {
         ok: false,
@@ -181,6 +298,11 @@ async function handleRun(rawBody) {
         diff,
         summary,
         logs: `PR create HTTP ${pr.status}: ${pr.text}`,
+        testsRun: gate.ran,
+        testsPassed: gate.passed ?? null,
+        testExitCode: gate.exitCode ?? null,
+        projectType: gate.projectType,
+        testSummary: tail(gate.summary, 2000),
       };
     }
 
@@ -188,11 +310,17 @@ async function handleRun(rawBody) {
       ok: true,
       prUrl: pr.prUrl,
       prNumber: pr.prNumber,
+      prDraft: draft,
       branch,
       commitSha,
       diff,
       summary,
       logs,
+      testsRun: gate.ran,
+      testsPassed: gate.passed ?? null,
+      testExitCode: gate.exitCode ?? null,
+      projectType: gate.projectType,
+      testSummary: tail(gate.summary, 2000),
     };
   } finally {
     await rm(workdir, { recursive: true, force: true }).catch(() => {});

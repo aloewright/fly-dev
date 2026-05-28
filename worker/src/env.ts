@@ -27,12 +27,19 @@ export type ContainerRunResult = {
   ok: boolean;
   prUrl?: string | null;
   prNumber?: number | null;
+  prDraft?: boolean | null;
   branch?: string | null;
   commitSha?: string | null;
   diff?: string | null;
   summary?: string | null;
   logs?: string | null;
   error?: string | null;
+  // Test gate (set when changes were produced and a test harness was detected).
+  testsRun?: boolean | null;
+  testsPassed?: boolean | null;
+  testExitCode?: number | null;
+  projectType?: string | null;
+  testSummary?: string | null;
 };
 
 export type Env = {
