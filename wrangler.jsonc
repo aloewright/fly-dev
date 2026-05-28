@@ -14,6 +14,11 @@
       "custom_domain": true
     }
   ],
+  "tail_consumers": [
+    {
+      "service": "fly-dev-tail"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
@@ -134,7 +139,7 @@
   "vars": {
     "APP_ENV": "production",
     "APP_URL": "https://dev.fly.pm",
-    "AI_GATEWAY_ID": "default",
+    "AI_GATEWAY_ID": "x",
     "APPLE_TEMPLATE_REPO": "aloewright/warp-template-apple-multiplatform",
     "CLOUDFLARE_TEMPLATE_REPO": "aloewright/aloe-template-cloudflare-fullstack",
     "FIRECRAWL_WORKER_URL": "https://firecrawl-cf.lazee.workers.dev",

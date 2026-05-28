@@ -38,6 +38,7 @@ export type Env = {
   FLY_AUTH_ORIGIN: string;
   PLAYWRIGHT_WORKER_URL: string;
   REQUIRE_HUMAN_APPROVAL: string;
+  BETTER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;
   INTERNAL_API_SECRET?: string;
   GITHUB_CLIENT_ID?: string;
