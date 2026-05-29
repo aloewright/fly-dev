@@ -81,6 +81,7 @@ export type Env = {
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
   CF_AIG_TOKEN?: string;
+  CLAUDE_CODE_OAUTH_TOKEN?: string;
 };
 
 export type CurrentUser = {

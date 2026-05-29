@@ -726,6 +726,9 @@ export class SandboxContainer extends Container<Env> {
     "objects.githubusercontent.com",
     "api.linear.app",
     "gateway.ai.cloudflare.com",
+    // claude-code calls api.anthropic.com directly when authed via the OAuth
+    // setup-token (subscription billing); the gateway only proxies API keys.
+    "api.anthropic.com",
     "firecrawl-cf.lazee.workers.dev",
     // Package registries for the test gate.
     "registry.npmjs.org",
@@ -798,6 +801,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env, RunWorkflowParams> {
             githubToken: creds.githubToken,
             linearToken: creds.linearToken,
             aiGateway: creds.aiGateway,
+            claudeOauthToken: creds.claudeOauthToken,
           }),
         }),
       );

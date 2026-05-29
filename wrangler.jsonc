@@ -149,6 +149,6 @@
     "FLY_AUTH_ORIGIN": "https://fly.pm",
     "PLAYWRIGHT_WORKER_URL": "",
     "REQUIRE_HUMAN_APPROVAL": "true",
-    "GITHUB_APP_ID": ""
+    "GITHUB_APP_ID": "3899646"
   }
 }

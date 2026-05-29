@@ -313,6 +313,7 @@ export async function prepareRunCredentials(
   githubToken: string | null;
   linearToken: string | null;
   aiGateway: { url: string; token: string } | null;
+  claudeOauthToken: string | null;
 }> {
   let githubToken = await getDecryptedToken(env, plan.userId, "github");
 
@@ -329,7 +330,8 @@ export async function prepareRunCredentials(
 
   const linearToken = await getDecryptedToken(env, plan.userId, "linear");
 
-  // Route the in-container agent's model calls through Cloudflare AI Gateway.
+  // For codex (OpenAI-compatible Messages API), keep gateway routing so calls
+  // are observed + cost-tracked centrally.
   const aiGateway =
     env.CF_AIG_TOKEN && env.CLOUDFLARE_ACCOUNT_ID
       ? {
@@ -338,7 +340,12 @@ export async function prepareRunCredentials(
         }
       : null;
 
-  return { githubToken, linearToken, aiGateway };
+  // For claude-code we bypass the gateway entirely: a long-lived OAuth token
+  // (`claude setup-token`) bills against the user's Claude Pro/Max subscription
+  // — the gateway only proxies API-key auth, not OAuth/subscription auth.
+  const claudeOauthToken = env.CLAUDE_CODE_OAUTH_TOKEN ?? null;
+
+  return { githubToken, linearToken, aiGateway, claudeOauthToken };
 }
 
 async function resolveRepoCoords(

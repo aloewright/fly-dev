@@ -59,21 +59,26 @@ function exec(cmd, args, opts = {}) {
   });
 }
 
-// Build the agent subprocess env. Routes model calls through Cloudflare AI
-// Gateway — never a raw provider key/endpoint. See ~/.claude/CLAUDE.md.
+// Build the agent subprocess env. claude-code uses a long-lived OAuth token
+// (`claude setup-token`) that bills against the user's Pro/Max subscription —
+// gateway routing does not apply to OAuth/subscription auth. codex (OpenAI-
+// compatible) still routes through Cloudflare AI Gateway when available.
 function buildAgentEnv(job) {
   const env = { HOME: "/tmp", IS_SANDBOX: "1" };
-  const gw = job.aiGateway;
-  if (gw?.url) {
-    // claude-code (Anthropic Messages format) → gateway anthropic passthrough.
-    env.ANTHROPIC_BASE_URL = gw.url;
-    env.ANTHROPIC_AUTH_TOKEN = "gateway";
-    // The gateway authorization travels as a header; the upstream provider key
-    // is supplied by the gateway (BYOK), so no raw provider key is in here.
-    if (gw.token) env.ANTHROPIC_CUSTOM_HEADERS = `cf-aig-authorization: Bearer ${gw.token}`;
-    env.OPENAI_BASE_URL = gw.url;
-  }
   if (job.linearToken) env.LINEAR_API_KEY = job.linearToken;
+
+  if (job.agentProvider === "codex") {
+    const gw = job.aiGateway;
+    if (gw?.url) {
+      env.OPENAI_BASE_URL = gw.url;
+    }
+    return env;
+  }
+
+  // claude-code: subscription/OAuth auth, calls hit api.anthropic.com directly.
+  if (job.claudeOauthToken) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = job.claudeOauthToken;
+  }
   return env;
 }
 
