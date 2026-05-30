@@ -1,6 +1,6 @@
 /* AGPL-3.0-or-later */
 import { Agent, routeAgentRequest } from "agents";
-import { Container, getContainer } from "@cloudflare/containers";
+import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { Hono } from "hono";
 import { DurableObject, WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
@@ -709,9 +709,20 @@ export class SandboxContainer extends Container<Env> {
   envVars = {
     NODE_ENV: "production",
     FLY_DEV_SANDBOX: "true",
+    // interceptHttps presents a MITM cert from /etc/cloudflare/certs.
+    // Point every common TLS lib at it so git, curl, node, python, go trust it.
+    NODE_EXTRA_CA_CERTS: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+    GIT_SSL_CAINFO: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+    CURL_CA_BUNDLE: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+    SSL_CERT_FILE: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+    REQUESTS_CA_BUNDLE: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
   };
   entrypoint = ["node", "/app/server.mjs"];
   enableInternet = false;
+  // Required: route HTTPS through ContainerProxy. With enableInternet=false +
+  // interceptHttps=false (the default), HTTPS traffic has no route and times out
+  // even for hosts on allowedHosts. Without this every github.com clone hangs.
+  interceptHttps = true;
   // Egress allowlist. Per-run secrets travel in the /run request body, never in
   // envVars (which are baked into the class definition). See SANDBOX_REVIEW.md S4/S6.
   // NOTE: the package-registry hosts below are required by the test gate
@@ -832,6 +843,7 @@ export class RunWorkflow extends WorkflowEntrypoint<Env, RunWorkflowParams> {
           testsPassed: result.testsPassed ?? null,
           testExitCode: result.testExitCode ?? null,
           projectType: result.projectType ?? null,
+          logs: result.logs ? redactSecrets(result.logs).slice(-4000) : null,
         },
       );
       await recordUsage(this.env, payload.userId, "container_runtime", {
@@ -880,6 +892,10 @@ export class RunWorkflow extends WorkflowEntrypoint<Env, RunWorkflowParams> {
     };
   }
 }
+
+// Required by @cloudflare/containers so a Workflow step can resolve the
+// container's DO via ctx.exports.ContainerProxy.
+export { ContainerProxy };
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
