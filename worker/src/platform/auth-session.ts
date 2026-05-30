@@ -2,6 +2,7 @@
 import { createAuth } from "../auth";
 import type { CurrentUser, Env } from "../env";
 import { ensureUser } from "./data";
+import { getCfAccessIdentity } from "./cf-access";
 import { hmacHex, timingSafeEqual } from "./crypto";
 
 type BetterAuthSession = {
@@ -15,6 +16,24 @@ type BetterAuthSession = {
 const SIGNATURE_WINDOW_MS = 5 * 60 * 1000;
 
 export async function getCurrentUser(request: Request, env: Env): Promise<CurrentUser | null> {
+  // Primary login path: Cloudflare Access (Zero Trust) fronts dev.fly.pm and
+  // runs the entire login (One-time PIN / configured IdP). The edge forwards a
+  // signed JWT we verify here. The Access policy already restricts who can sign
+  // in; the email allowlist below is defense-in-depth in case the policy is ever
+  // loosened. See cf-access.ts and SANDBOX_REVIEW.md A1.
+  const cfAccess = await getCfAccessIdentity(request, env);
+  if (cfAccess) {
+    if (!isAllowedEmail(env, cfAccess.email)) {
+      return null;
+    }
+    return ensureUser(env, {
+      email: cfAccess.email,
+      name: cfAccess.name,
+      flyUserSlug: slugify(cfAccess.email) || `cf-${cfAccess.sub}`,
+      authSource: "cf-access",
+    });
+  }
+
   const betterAuthUser = await getBetterAuthUser(request, env);
   if (betterAuthUser) {
     return ensureUser(env, betterAuthUser);
@@ -137,6 +156,20 @@ function isFreshTimestamp(timestamp: string): boolean {
 function isLocalRequest(request: Request): boolean {
   const hostname = new URL(request.url).hostname;
   return hostname === "localhost" || hostname === "127.0.0.1";
+}
+
+// Comma-separated allowlist of emails permitted to sign in. When unset, we defer
+// entirely to the Cloudflare Access policy (which is itself scoped to the owner).
+function isAllowedEmail(env: Env, email: string): boolean {
+  const raw = env.LOGIN_ALLOWED_EMAILS;
+  if (!raw) {
+    return true;
+  }
+  const allow = raw
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  return allow.length === 0 || allow.includes(email.toLowerCase());
 }
 
 function slugify(value: string): string {

@@ -71,6 +71,10 @@ export type Env = {
   BETTER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;
   INTERNAL_API_SECRET?: string;
+  // Cloudflare Access (Zero Trust) login. Non-secret identifiers; safe in vars.
+  CF_ACCESS_TEAM_DOMAIN?: string;
+  CF_ACCESS_AUD?: string;
+  LOGIN_ALLOWED_EMAILS?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   GITHUB_WEBHOOK_SECRET?: string;
@@ -89,5 +93,5 @@ export type CurrentUser = {
   email: string | null;
   name: string | null;
   flyUserSlug: string;
-  authSource: "fly" | "better-auth" | "dev" | "internal";
+  authSource: "fly" | "better-auth" | "dev" | "internal" | "cf-access";
 };

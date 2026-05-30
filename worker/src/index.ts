@@ -512,9 +512,12 @@ app.get("/api/integrations/:provider/callback", async (c) => {
     return c.json({ error: "Unsupported provider" }, 400);
   }
   const response = await handleOAuthCallback(provider, c.req.raw, c.env);
-  // Convert non-2xx JSON error responses into a dashboard redirect for
-  // browser navigations. Successful redirects (302 to /) pass through.
-  if (!response.ok && wantsHtml(c.req.raw)) {
+  // Convert genuine error responses (>=400) into a dashboard banner redirect for
+  // browser navigations. handleOAuthCallback signals SUCCESS with a 302 redirect,
+  // whose `.ok` is false (ok is 2xx only) — keying off `.ok` mislabeled every
+  // successful connect as "oauth_error=unknown". Check the status code instead so
+  // the 302 success passes through to /?connected=<provider>.
+  if (response.status >= 400 && wantsHtml(c.req.raw)) {
     const body = (await response.clone().json().catch(() => ({ error: "unknown" }))) as {
       error?: string;
     };
