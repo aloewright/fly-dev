@@ -478,13 +478,27 @@ app.post("/api/runs/:id/cancel", async (c) => {
   return cancelRun(c.env, user, c.req.param("id"));
 });
 
+// Browsers navigating to /connect or /callback expect to land somewhere
+// usable. If the user isn't signed in (or the OAuth state expired), don't
+// dump a raw JSON error into the address bar — bounce them back to the
+// dashboard with a banner-friendly query param. Programmatic API callers
+// (Accept: application/json) still get the JSON shape.
+function wantsHtml(request: Request): boolean {
+  return (request.headers.get("accept") ?? "").toLowerCase().includes("text/html");
+}
+
 app.get("/api/integrations/:provider/connect", async (c) => {
   const provider = c.req.param("provider") as OAuthProvider;
   if (!isOAuthProvider(provider)) {
     return c.json({ error: "Unsupported provider" }, 400);
   }
   const user = await requireUser(c.req.raw, c.env);
-  if (user instanceof Response) return user;
+  if (user instanceof Response) {
+    if (wantsHtml(c.req.raw)) {
+      return c.redirect(`/?signin_required=1&provider=${provider}`, 302);
+    }
+    return user;
+  }
   const result = await createOAuthConnectUrl(provider, c.req.raw, c.env, user);
   if (result.setupRequired || c.req.query("format") === "json") {
     return c.json(result);
@@ -497,7 +511,17 @@ app.get("/api/integrations/:provider/callback", async (c) => {
   if (!isOAuthProvider(provider)) {
     return c.json({ error: "Unsupported provider" }, 400);
   }
-  return handleOAuthCallback(provider, c.req.raw, c.env);
+  const response = await handleOAuthCallback(provider, c.req.raw, c.env);
+  // Convert non-2xx JSON error responses into a dashboard redirect for
+  // browser navigations. Successful redirects (302 to /) pass through.
+  if (!response.ok && wantsHtml(c.req.raw)) {
+    const body = (await response.clone().json().catch(() => ({ error: "unknown" }))) as {
+      error?: string;
+    };
+    const reason = encodeURIComponent(body.error ?? "oauth_failed");
+    return c.redirect(`/?oauth_error=${reason}&provider=${provider}`, 302);
+  }
+  return response;
 });
 
 app.post("/api/webhooks/:provider", async (c) => {
