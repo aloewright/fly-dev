@@ -75,6 +75,89 @@ type TaskResponse = {
   approvalRequired: boolean;
 };
 
+function getBannerFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("signin_required")) {
+    const provider = params.get("provider");
+    return provider
+      ? `Sign in to connect ${provider}.`
+      : "Sign in to continue.";
+  }
+  const oauthError = params.get("oauth_error");
+  if (oauthError) {
+    const provider = params.get("provider") ?? "the provider";
+    return `OAuth with ${provider} failed: ${decodeURIComponent(oauthError)}. Try again.`;
+  }
+  return null;
+}
+
+function SignInForm({ banner }: { banner: string | null }) {
+  const queryClient = useQueryClient();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const signIn = useMutation({
+    mutationFn: () =>
+      fetchJson<{ user: unknown }>("/api/auth/sign-in/email", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
+  });
+  return (
+    <main className="min-h-screen bg-[#f7f8fb] text-[#17181c]">
+      <div className="mx-auto max-w-md px-5 py-12">
+        <h1 className="mb-2 text-2xl font-semibold">dev.fly.pm</h1>
+        <p className="mb-6 text-sm text-[#5b6472]">Sign in to continue.</p>
+        {banner ? (
+          <div className="mb-4 rounded-md border border-[#f1b8b8] bg-[#fff1f1] px-3 py-2 text-sm text-[#a12828]">
+            {banner}
+          </div>
+        ) : null}
+        <form
+          className="grid gap-3 rounded-md border border-[#dfe3ea] bg-white p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            signIn.mutate();
+          }}
+        >
+          <label className="grid gap-1 text-sm">
+            <span className="text-[#5b6472]">Email</span>
+            <input
+              type="email"
+              autoComplete="email"
+              required
+              className="h-10 rounded border border-[#c9d0da] bg-white px-3 text-sm outline-none focus:border-[#3267d6]"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </label>
+          <label className="grid gap-1 text-sm">
+            <span className="text-[#5b6472]">Password</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              required
+              className="h-10 rounded border border-[#c9d0da] bg-white px-3 text-sm outline-none focus:border-[#3267d6]"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+          {signIn.error ? (
+            <p className="text-sm text-[#a12828]">{signIn.error.message}</p>
+          ) : null}
+          <Button disabled={signIn.isPending || email.length === 0 || password.length === 0}>
+            {signIn.isPending ? "Signing in…" : "Sign in"}
+          </Button>
+        </form>
+      </div>
+    </main>
+  );
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const [objective, setObjective] = useState("");
@@ -83,6 +166,19 @@ export function App() {
   const overviewQuery = useQuery({
     queryKey: ["overview"],
     queryFn: () => fetchJson<Overview>("/api/overview"),
+  });
+
+  const banner = getBannerFromUrl();
+
+  const signOut = useMutation({
+    mutationFn: () =>
+      fetchJson("/api/auth/sign-out", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
   });
 
   const taskMutation = useMutation({
@@ -97,6 +193,12 @@ export function App() {
       void queryClient.invalidateQueries({ queryKey: ["overview"] });
     },
   });
+
+  // Early return AFTER all hooks have run so hook order is stable across
+  // authed vs unauthed renders. See react.dev/errors/300.
+  if (overviewQuery.data && !overviewQuery.data.user) {
+    return <SignInForm banner={banner} />;
+  }
 
   const overview = overviewQuery.data;
   const projects = overview?.projects ?? [];
@@ -130,9 +232,26 @@ export function App() {
             <Button variant="secondary" onClick={() => void overviewQuery.refetch()}>
               Refresh
             </Button>
+            {overview?.user ? (
+              <Button
+                variant="secondary"
+                disabled={signOut.isPending}
+                onClick={() => signOut.mutate()}
+              >
+                {signOut.isPending ? "Signing out…" : "Sign out"}
+              </Button>
+            ) : null}
           </div>
         </div>
       </header>
+
+      {banner ? (
+        <div className="mx-auto max-w-7xl px-5 pt-4">
+          <div className="rounded-md border border-[#f1b8b8] bg-[#fff1f1] px-3 py-2 text-sm text-[#a12828]">
+            {banner}
+          </div>
+        </div>
+      ) : null}
 
       <div className="mx-auto grid max-w-7xl gap-5 px-5 py-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <section className="grid gap-5">
