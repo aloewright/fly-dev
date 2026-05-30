@@ -170,16 +170,12 @@ export function App() {
 
   const banner = getBannerFromUrl();
 
-  const signOut = useMutation({
-    mutationFn: () =>
-      fetchJson("/api/auth/sign-out", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["overview"] });
-    },
-  });
+  // Login is via Cloudflare Access, so sign-out must clear the Access session,
+  // not the unused better-auth one. Full-page navigate to the Worker's
+  // /api/access-logout, which 302s to the Access logout endpoint.
+  function signOut() {
+    window.location.href = "/api/access-logout";
+  }
 
   const taskMutation = useMutation({
     mutationFn: (payload: { objective: string; linearProjectId?: string }) =>
@@ -233,12 +229,8 @@ export function App() {
               Refresh
             </Button>
             {overview?.user ? (
-              <Button
-                variant="secondary"
-                disabled={signOut.isPending}
-                onClick={() => signOut.mutate()}
-              >
-                {signOut.isPending ? "Signing out…" : "Sign out"}
+              <Button variant="secondary" onClick={signOut}>
+                Sign out
               </Button>
             ) : null}
           </div>
