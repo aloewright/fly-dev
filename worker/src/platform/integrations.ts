@@ -47,7 +47,10 @@ export async function createOAuthConnectUrl(
   url.searchParams.set("client_id", env.LINEAR_CLIENT_ID!);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", "read write issues:create");
+  // Linear expects a COMMA-separated scope list, unlike GitHub's space-separated
+  // form. Space-separated values are read as a single invalid scope. See
+  // https://linear.app/developers/oauth-2-0-authentication
+  url.searchParams.set("scope", "read,write,issues:create");
   url.searchParams.set("state", state);
   return { setupRequired: false, provider, url: url.toString() };
 }
