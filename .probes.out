@@ -1,0 +1,10 @@
+===== app_users matching probe%@example.com (preview before delete) =====
+[{"id":"user_8d79a5a338e74677b56575c9f8db0e38","fly_user_slug":"ba-vHcO5jDthJzbvifcfjDD54auTTJ0DEB4","email":"probe-fixed-123@example.com","auth_source":"better-auth"}]
+===== related rows that reference those users (FK safety check) =====
+  account_connections: 0 rows referencing probe users
+  runs: 0 rows referencing probe users
+  artifacts: err rows referencing probe users
+  agent_memories: 0 rows referencing probe users
+  usage_events: 0 rows referencing probe users
+  approvals: 0 rows referencing probe users
+DONE_PREVIEW
