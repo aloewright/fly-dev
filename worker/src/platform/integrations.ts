@@ -469,3 +469,204 @@ export async function backfillLinearProjects(
 
   return { synced: nodes.length };
 }
+
+type GithubRepoNode = {
+  id: number;
+  name: string;
+  full_name: string;
+  html_url: string;
+  description: string | null;
+  private: boolean;
+  fork: boolean;
+  archived: boolean;
+  default_branch: string | null;
+  open_issues_count: number;
+  stargazers_count: number;
+  language: string | null;
+  pushed_at: string | null;
+  updated_at: string | null;
+  owner: { login: string };
+};
+
+// Pull every repository the connected GitHub account can see and upsert it into
+// github_repos. Mirrors backfillLinearProjects: GitHub has no webhook that emits
+// the full repo list, so this is how the dashboard gets a complete view.
+// Paginates the user-repos endpoint (sorted by recent push) up to a sane cap.
+export async function backfillGithubRepos(
+  env: Env,
+  userId: string,
+): Promise<{ synced: number; reason?: string }> {
+  const token = await getDecryptedToken(env, userId, "github");
+  if (!token) {
+    return { synced: 0, reason: "GitHub is not connected" };
+  }
+
+  const perPage = 100;
+  const maxPages = 10; // up to 1000 repos
+  let synced = 0;
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const response = await fetch(
+      `https://api.github.com/user/repos?per_page=${perPage}&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`,
+      {
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: "application/vnd.github+json",
+          "user-agent": "fly-dev",
+          "x-github-api-version": "2022-11-28",
+        },
+      },
+    );
+    if (!response.ok) {
+      // Surface partial progress rather than throwing mid-pagination.
+      return { synced, reason: `GitHub API returned ${response.status}` };
+    }
+
+    const repos = (await response.json()) as GithubRepoNode[];
+    if (!Array.isArray(repos) || repos.length === 0) {
+      break;
+    }
+
+    for (const repo of repos) {
+      await runSql(
+        env,
+        `INSERT INTO github_repos
+           (id, user_id, github_id, owner, name, full_name, url, description, private, fork, archived, default_branch, open_issues, stars, language, pushed_at, updated_at, synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(user_id, github_id) DO UPDATE SET
+           owner = excluded.owner,
+           name = excluded.name,
+           full_name = excluded.full_name,
+           url = excluded.url,
+           description = excluded.description,
+           private = excluded.private,
+           fork = excluded.fork,
+           archived = excluded.archived,
+           default_branch = excluded.default_branch,
+           open_issues = excluded.open_issues,
+           stars = excluded.stars,
+           language = excluded.language,
+           pushed_at = excluded.pushed_at,
+           updated_at = excluded.updated_at,
+           synced_at = CURRENT_TIMESTAMP`,
+        [
+          `gh_${repo.id}`,
+          userId,
+          repo.id,
+          repo.owner?.login ?? "",
+          repo.name,
+          repo.full_name,
+          repo.html_url,
+          repo.description,
+          repo.private ? 1 : 0,
+          repo.fork ? 1 : 0,
+          repo.archived ? 1 : 0,
+          repo.default_branch,
+          repo.open_issues_count ?? 0,
+          repo.stargazers_count ?? 0,
+          repo.language,
+          repo.pushed_at,
+          repo.updated_at,
+        ],
+      );
+      synced += 1;
+    }
+
+    if (repos.length < perPage) {
+      break;
+    }
+  }
+
+  return { synced };
+}
+
+export type LinearIssue = {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  state: string;
+  stateType: string;
+  priority: number;
+  assignee: string | null;
+  updatedAt: string | null;
+};
+
+// Live-fetch the OPEN issues for a single Linear project (state types backlog /
+// unstarted / started — i.e. excluding completed and canceled). Nothing is
+// stored; the dashboard calls this when a project row is expanded.
+export async function getLinearProjectIssues(
+  env: Env,
+  userId: string,
+  projectId: string,
+): Promise<{ issues: LinearIssue[]; reason?: string }> {
+  const token = await getDecryptedToken(env, userId, "linear");
+  if (!token) {
+    return { issues: [], reason: "Linear is not connected" };
+  }
+
+  const response = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      query: `query ProjectIssues($id: String!) {
+        project(id: $id) {
+          issues(
+            first: 100
+            filter: { state: { type: { nin: ["completed", "canceled"] } } }
+            orderBy: updatedAt
+          ) {
+            nodes {
+              id
+              identifier
+              title
+              url
+              priority
+              updatedAt
+              state { name type }
+              assignee { displayName }
+            }
+          }
+        }
+      }`,
+      variables: { id: projectId },
+    }),
+  });
+
+  const json = (await response.json()) as {
+    data?: {
+      project?: {
+        issues?: {
+          nodes?: Array<{
+            id: string;
+            identifier: string;
+            title: string;
+            url: string;
+            priority: number | null;
+            updatedAt: string | null;
+            state?: { name?: string; type?: string } | null;
+            assignee?: { displayName?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+
+  const nodes = json.data?.project?.issues?.nodes ?? [];
+  const issues: LinearIssue[] = nodes.map((node) => ({
+    id: node.id,
+    identifier: node.identifier,
+    title: node.title,
+    url: node.url,
+    state: node.state?.name ?? "Unknown",
+    stateType: node.state?.type ?? "unknown",
+    priority: node.priority ?? 0,
+    assignee: node.assignee?.displayName ?? null,
+    updatedAt: node.updatedAt ?? null,
+  }));
+
+  return { issues };
+}

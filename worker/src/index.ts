@@ -20,9 +20,11 @@ import {
   recordUsage,
 } from "./platform/data";
 import {
+  backfillGithubRepos,
   backfillLinearProjects,
   createOAuthConnectUrl,
   getDecryptedToken,
+  getLinearProjectIssues,
   handleOAuthCallback,
   storeWebhook,
   syncLinearProjectFromPayload,
@@ -435,6 +437,14 @@ app.get("/api/projects/:id/runs", async (c) => {
   return c.json({ runs: await getRuns(c.env, user.id, c.req.param("id")) });
 });
 
+// Open issues for a Linear project, fetched live from the Linear API (nothing
+// stored — always current). Used by the dashboard's project drill-down.
+app.get("/api/projects/:id/issues", async (c) => {
+  const user = await requireUser(c.req.raw, c.env);
+  if (user instanceof Response) return user;
+  return c.json(await getLinearProjectIssues(c.env, user.id, c.req.param("id")));
+});
+
 app.get("/api/runs/:id/events", async (c) => {
   const user = await requireUser(c.req.raw, c.env);
   if (user instanceof Response) return user;
@@ -528,18 +538,21 @@ app.get("/api/integrations/:provider/callback", async (c) => {
   return response;
 });
 
-// Manual project backfill. Projects otherwise only land via Linear webhooks
-// (no initial sync), so a freshly connected workspace shows only the few
-// projects that happen to fire an event. This pulls the full project list from
-// the Linear API using the connected OAuth token and upserts them.
+// Manual backfill. Each provider otherwise only populates via webhooks (Linear)
+// or never (GitHub repos), so this pulls the full list from the provider API
+// using the connected OAuth token and upserts it. Mirrors what a fresh connect
+// does, but on demand.
 app.post("/api/integrations/:provider/sync", async (c) => {
   const provider = c.req.param("provider") as OAuthProvider;
-  if (provider !== "linear") {
-    return c.json({ error: "Sync is only supported for Linear" }, 400);
+  if (!isOAuthProvider(provider)) {
+    return c.json({ error: "Unsupported provider" }, 400);
   }
   const user = await requireUser(c.req.raw, c.env);
   if (user instanceof Response) return user;
-  const result = await backfillLinearProjects(c.env, user.id);
+  const result =
+    provider === "linear"
+      ? await backfillLinearProjects(c.env, user.id)
+      : await backfillGithubRepos(c.env, user.id);
   return c.json(result);
 });
 

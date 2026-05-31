@@ -20,6 +20,21 @@ export type ProjectSummary = {
   failedRuns: number;
 };
 
+export type GithubRepoSummary = {
+  id: string;
+  owner: string;
+  name: string;
+  fullName: string;
+  url: string;
+  description: string | null;
+  private: number;
+  archived: number;
+  openIssues: number;
+  stars: number;
+  language: string | null;
+  pushedAt: string | null;
+};
+
 export type UsageSummary = {
   events: number;
   modelCalls: number;
@@ -40,6 +55,7 @@ export type Overview = {
     pendingApproximation: number;
   };
   projects: ProjectSummary[];
+  repos: GithubRepoSummary[];
   recentRuns: RunRow[];
   recentArtifacts: ArtifactRow[];
   templates: TemplateRow[];
@@ -217,6 +233,30 @@ export async function getProjects(env: Env): Promise<ProjectSummary[]> {
   );
 }
 
+export async function getGithubRepos(env: Env, userId: string): Promise<GithubRepoSummary[]> {
+  return all<GithubRepoSummary>(
+    env,
+    `SELECT
+       id,
+       owner,
+       name,
+       full_name AS fullName,
+       url,
+       description,
+       private,
+       archived,
+       open_issues AS openIssues,
+       stars,
+       language,
+       pushed_at AS pushedAt
+     FROM github_repos
+     WHERE user_id = ?
+     ORDER BY pushed_at DESC
+     LIMIT 100`,
+    [userId],
+  );
+}
+
 export async function getRuns(env: Env, userId: string, projectId?: string): Promise<RunRow[]> {
   const values = projectId ? [userId, projectId] : [userId];
   return all<RunRow>(
@@ -244,10 +284,11 @@ export async function getRuns(env: Env, userId: string, projectId?: string): Pro
 
 export async function getOverview(env: Env, user: CurrentUser | null): Promise<Overview> {
   const userId = user?.id ?? "anonymous";
-  const [usage, projects, recentRuns, recentArtifacts, templates, connections] =
+  const [usage, projects, repos, recentRuns, recentArtifacts, templates, connections] =
     await Promise.all([
       user ? getUsage(env, user.id) : demoUsage(),
       getProjects(env),
+      user ? getGithubRepos(env, user.id) : Promise.resolve([]),
       user ? getRuns(env, user.id) : Promise.resolve([]),
       all<ArtifactRow>(
         env,
@@ -281,6 +322,7 @@ export async function getOverview(env: Env, user: CurrentUser | null): Promise<O
       pendingApproximation: recentRuns.filter((run) => run.status === "queued").length,
     },
     projects: projects.length > 0 ? projects : demoProjects(),
+    repos,
     recentRuns,
     recentArtifacts,
     templates: templates.length > 0 ? templates : defaultTemplates(env),

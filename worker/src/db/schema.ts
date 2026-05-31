@@ -44,6 +44,27 @@ export const linearProjects = sqliteTable("linear_projects", {
   syncedAt: text("synced_at").notNull().default("CURRENT_TIMESTAMP"),
 });
 
+export const githubRepos = sqliteTable("github_repos", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  githubId: integer("github_id").notNull(),
+  owner: text("owner").notNull(),
+  name: text("name").notNull(),
+  fullName: text("full_name").notNull(),
+  url: text("url").notNull(),
+  description: text("description"),
+  private: integer("private").notNull().default(0),
+  fork: integer("fork").notNull().default(0),
+  archived: integer("archived").notNull().default(0),
+  defaultBranch: text("default_branch"),
+  openIssues: integer("open_issues").notNull().default(0),
+  stars: integer("stars").notNull().default(0),
+  language: text("language"),
+  pushedAt: text("pushed_at"),
+  updatedAt: text("updated_at"),
+  syncedAt: text("synced_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
 export const repositoryMappings = sqliteTable("repository_mappings", {
   id: text("id").primaryKey(),
   linearProjectId: text("linear_project_id").notNull(),
