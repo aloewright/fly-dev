@@ -118,6 +118,13 @@ export async function handleOAuthCallback(
     ],
   );
 
+  // Projects only otherwise sync via webhooks (no initial backfill), so pull the
+  // full list immediately after a successful Linear connect. Best-effort: never
+  // block or fail the connect redirect on a backfill error.
+  if (provider === "linear") {
+    await backfillLinearProjects(env, stateRecord.userId).catch(() => undefined);
+  }
+
   return Response.redirect(`${env.APP_URL}/?connected=${provider}`, 302);
 }
 
@@ -405,4 +412,60 @@ export async function listKnownConnections(env: Env, userId: string) {
      ORDER BY provider`,
     [userId],
   );
+}
+
+type LinearProjectNode = {
+  id: string;
+  name: string;
+  url?: string | null;
+  description?: string | null;
+  state?: string | null;
+  updatedAt?: string | null;
+};
+
+// Pull every project from the connected Linear workspace and upsert each through
+// the same path webhooks use (so repository mapping is computed consistently).
+// Linear otherwise never sends a full list — only per-event webhooks — so without
+// this a freshly connected workspace shows only the projects that happened to
+// fire an event. Returns how many projects were synced.
+export async function backfillLinearProjects(
+  env: Env,
+  userId: string,
+): Promise<{ synced: number; reason?: string }> {
+  const token = await getDecryptedToken(env, userId, "linear");
+  if (!token) {
+    return { synced: 0, reason: "Linear is not connected" };
+  }
+
+  const response = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      query:
+        "{ projects(first: 250) { nodes { id name url description state updatedAt } } }",
+    }),
+  });
+
+  const json = (await response.json()) as {
+    data?: { projects?: { nodes?: LinearProjectNode[] } };
+  };
+  const nodes = json.data?.projects?.nodes ?? [];
+
+  for (const project of nodes) {
+    await syncLinearProjectFromPayload(env, {
+      data: {
+        id: project.id,
+        name: project.name,
+        url: project.url ?? null,
+        description: project.description ?? null,
+        status: project.state ?? null,
+        updatedAt: project.updatedAt ?? null,
+      },
+    });
+  }
+
+  return { synced: nodes.length };
 }

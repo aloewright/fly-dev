@@ -224,6 +224,19 @@ export function App() {
     },
   });
 
+  // Pull the full Linear project list on demand (projects otherwise only sync via
+  // webhooks). Refetches overview so new projects appear immediately.
+  const syncLinear = useMutation({
+    mutationFn: () =>
+      fetchJson<{ synced: number }>("/api/integrations/linear/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
+  });
+
   // Early return AFTER all hooks have run so hook order is stable across
   // authed vs unauthed renders. See react.dev/errors/300.
   if (overviewQuery.data && !overviewQuery.data.user) {
@@ -407,7 +420,19 @@ export function App() {
                         </Text>
                       </Box>
                       {connected ? (
-                        <StatusBadge status={connection!.status} />
+                        <Group gap="xs">
+                          <StatusBadge status={connection!.status} />
+                          {provider.id === "linear" ? (
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              loading={syncLinear.isPending}
+                              onClick={() => syncLinear.mutate()}
+                            >
+                              Sync
+                            </Button>
+                          ) : null}
+                        </Group>
                       ) : (
                         <Button
                           size="xs"

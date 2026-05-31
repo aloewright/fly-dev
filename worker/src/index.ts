@@ -20,6 +20,7 @@ import {
   recordUsage,
 } from "./platform/data";
 import {
+  backfillLinearProjects,
   createOAuthConnectUrl,
   getDecryptedToken,
   handleOAuthCallback,
@@ -527,6 +528,21 @@ app.get("/api/integrations/:provider/callback", async (c) => {
   return response;
 });
 
+// Manual project backfill. Projects otherwise only land via Linear webhooks
+// (no initial sync), so a freshly connected workspace shows only the few
+// projects that happen to fire an event. This pulls the full project list from
+// the Linear API using the connected OAuth token and upserts them.
+app.post("/api/integrations/:provider/sync", async (c) => {
+  const provider = c.req.param("provider") as OAuthProvider;
+  if (provider !== "linear") {
+    return c.json({ error: "Sync is only supported for Linear" }, 400);
+  }
+  const user = await requireUser(c.req.raw, c.env);
+  if (user instanceof Response) return user;
+  const result = await backfillLinearProjects(c.env, user.id);
+  return c.json(result);
+});
+
 app.post("/api/webhooks/:provider", async (c) => {
   const provider = c.req.param("provider") as OAuthProvider;
   if (!isOAuthProvider(provider)) {
@@ -633,6 +649,22 @@ app.post("/api/internal/summon", async (c) => {
       authSource: "internal",
     }));
   return createTaskRun(c.env, localUser, payload as CreateTaskPayload);
+});
+
+// Real sign-out. Login is via Cloudflare Access, so the session is the
+// CF_Authorization cookie, not a better-auth session — POSTing to
+// /api/auth/sign-out clears nothing the user is actually using. Redirect to the
+// Access logout endpoint, which clears the Access session cookie; Access then
+// re-challenges on the next request. Registered before the /api/auth/* mount and
+// the catch-all so neither shadows it.
+app.get("/api/access-logout", (c) => {
+  const team = c.env.CF_ACCESS_TEAM_DOMAIN;
+  if (!team) {
+    return c.redirect("/", 302);
+  }
+  const url = new URL(`https://${team}/cdn-cgi/access/logout`);
+  url.searchParams.set("returnTo", c.env.APP_URL || new URL(c.req.url).origin);
+  return c.redirect(url.toString(), 302);
 });
 
 app.on(["GET", "POST"], "/api/auth/*", (c) => {
