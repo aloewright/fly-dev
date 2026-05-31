@@ -10,6 +10,7 @@ import {
   Card,
   Container,
   Group,
+  Loader,
   Paper,
   PasswordInput,
   Select,
@@ -62,6 +63,20 @@ type Overview = {
     activeRuns: number;
     failedRuns: number;
   }>;
+  repos: Array<{
+    id: string;
+    owner: string;
+    name: string;
+    fullName: string;
+    url: string;
+    description: string | null;
+    private: number;
+    archived: number;
+    openIssues: number;
+    stars: number;
+    language: string | null;
+    pushedAt: string | null;
+  }>;
   recentRuns: Array<{
     id: string;
     objective: string;
@@ -93,6 +108,18 @@ type TaskResponse = {
   id: string;
   status: string;
   approvalRequired: boolean;
+};
+
+type LinearIssue = {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  state: string;
+  stateType: string;
+  priority: number;
+  assignee: string | null;
+  updatedAt: string | null;
 };
 
 const PROVIDERS: Array<{ id: Provider; label: string }> = [
@@ -224,11 +251,13 @@ export function App() {
     },
   });
 
-  // Pull the full Linear project list on demand (projects otherwise only sync via
-  // webhooks). Refetches overview so new projects appear immediately.
-  const syncLinear = useMutation({
-    mutationFn: () =>
-      fetchJson<{ synced: number }>("/api/integrations/linear/sync", {
+  // Pull the full list from a provider on demand (Linear projects / GitHub repos
+  // otherwise only populate via webhooks or not at all). Refetches overview so
+  // the synced items appear immediately. Keyed by provider so each Connections
+  // row shows its own loading state.
+  const sync = useMutation({
+    mutationFn: (provider: Provider) =>
+      fetchJson<{ synced: number }>(`/api/integrations/${provider}/sync`, {
         method: "POST",
         headers: { "content-type": "application/json" },
       }),
@@ -376,6 +405,27 @@ export function App() {
 
             <Card withBorder radius="md" padding={0}>
               <Box px="lg" py="sm" style={sectionHeader}>
+                <Group justify="space-between">
+                  <Title order={2} size="h4">
+                    GitHub Repos
+                  </Title>
+                  <Text size="xs" c="dimmed">
+                    {(overview?.repos ?? []).length}
+                  </Text>
+                </Group>
+              </Box>
+              <Stack gap={0}>
+                {(overview?.repos ?? []).map((repo) => (
+                  <RepoRow key={repo.id} repo={repo} />
+                ))}
+                {(overview?.repos ?? []).length === 0 ? (
+                  <EmptyRow label="No repos synced — connect GitHub or hit Sync" />
+                ) : null}
+              </Stack>
+            </Card>
+
+            <Card withBorder radius="md" padding={0}>
+              <Box px="lg" py="sm" style={sectionHeader}>
                 <Title order={2} size="h4">
                   Recent Runs
                 </Title>
@@ -422,16 +472,14 @@ export function App() {
                       {connected ? (
                         <Group gap="xs">
                           <StatusBadge status={connection!.status} />
-                          {provider.id === "linear" ? (
-                            <Button
-                              size="xs"
-                              variant="subtle"
-                              loading={syncLinear.isPending}
-                              onClick={() => syncLinear.mutate()}
-                            >
-                              Sync
-                            </Button>
-                          ) : null}
+                          <Button
+                            size="xs"
+                            variant="subtle"
+                            loading={sync.isPending && sync.variables === provider.id}
+                            onClick={() => sync.mutate(provider.id)}
+                          >
+                            Sync
+                          </Button>
                         </Group>
                       ) : (
                         <Button
@@ -540,23 +588,155 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+const PRIORITY_LABELS: Record<number, string> = {
+  1: "Urgent",
+  2: "High",
+  3: "Medium",
+  4: "Low",
+};
+
 function ProjectRow({ project }: { project: Overview["projects"][number] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Open issues are fetched live (never stored) and only when the row is
+  // expanded, so collapsed projects cost nothing.
+  const issuesQuery = useQuery({
+    queryKey: ["issues", project.id],
+    queryFn: () =>
+      fetchJson<{ issues: LinearIssue[]; reason?: string }>(
+        `/api/projects/${project.id}/issues`,
+      ),
+    enabled: expanded,
+  });
+
+  const issues = issuesQuery.data?.issues ?? [];
+
+  return (
+    <Box style={rowBorder}>
+      <Group
+        justify="space-between"
+        px="lg"
+        py="sm"
+        wrap="wrap"
+        onClick={() => setExpanded((value) => !value)}
+        style={{ cursor: "pointer" }}
+      >
+        <Box style={{ minWidth: 0, flex: 1 }}>
+          <Group gap="xs" wrap="nowrap">
+            <Text size="xs" c="dimmed" w={10}>
+              {expanded ? "▾" : "▸"}
+            </Text>
+            <Text size="sm" fw={600} truncate>
+              {project.name}
+            </Text>
+          </Group>
+          <Text size="xs" c="dimmed" truncate ml={18}>
+            {project.repoUrl ?? project.url ?? "repository pending"}
+          </Text>
+        </Box>
+        <Group gap="xs">
+          <StatusBadge status={project.status} />
+          <StatusBadge status={project.repoMappingStatus} />
+        </Group>
+        <Text size="sm" c="dimmed">
+          {project.activeRuns} active · {project.failedRuns} failed
+        </Text>
+      </Group>
+
+      {expanded ? (
+        <Box px="lg" pb="sm" pl={32}>
+          {issuesQuery.isLoading ? (
+            <Group gap="xs" py="xs">
+              <Loader size="xs" />
+              <Text size="xs" c="dimmed">
+                Loading open issues…
+              </Text>
+            </Group>
+          ) : issuesQuery.isError ? (
+            <Text size="xs" c="red" py="xs">
+              Failed to load issues. {(issuesQuery.error as Error)?.message}
+            </Text>
+          ) : issuesQuery.data?.reason ? (
+            <Text size="xs" c="dimmed" py="xs">
+              {issuesQuery.data.reason}
+            </Text>
+          ) : issues.length === 0 ? (
+            <Text size="xs" c="dimmed" py="xs">
+              No open issues.
+            </Text>
+          ) : (
+            <Stack gap={4} pt="xs">
+              {issues.map((issue) => (
+                <Group key={issue.id} justify="space-between" wrap="nowrap" gap="sm">
+                  <Box style={{ minWidth: 0, flex: 1 }}>
+                    <Anchor
+                      href={issue.url}
+                      target="_blank"
+                      size="sm"
+                      truncate
+                      style={{ display: "block" }}
+                    >
+                      <Text component="span" size="xs" c="dimmed" mr={6}>
+                        {issue.identifier}
+                      </Text>
+                      {issue.title}
+                    </Anchor>
+                    {issue.assignee ? (
+                      <Text size="xs" c="dimmed">
+                        {issue.assignee}
+                      </Text>
+                    ) : null}
+                  </Box>
+                  <Group gap={6} wrap="nowrap">
+                    {PRIORITY_LABELS[issue.priority] ? (
+                      <Badge size="xs" variant="outline" color="gray" tt="none">
+                        {PRIORITY_LABELS[issue.priority]}
+                      </Badge>
+                    ) : null}
+                    <StatusBadge status={issue.state} />
+                  </Group>
+                </Group>
+              ))}
+            </Stack>
+          )}
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+function RepoRow({ repo }: { repo: Overview["repos"][number] }) {
   return (
     <Group justify="space-between" px="lg" py="sm" style={rowBorder} wrap="wrap">
       <Box style={{ minWidth: 0, flex: 1 }}>
-        <Text size="sm" fw={600} truncate>
-          {project.name}
-        </Text>
-        <Text size="xs" c="dimmed" truncate>
-          {project.repoUrl ?? project.url ?? "repository pending"}
-        </Text>
+        <Anchor href={repo.url} target="_blank" size="sm" fw={600} truncate style={{ display: "block" }}>
+          {repo.fullName}
+        </Anchor>
+        {repo.description ? (
+          <Text size="xs" c="dimmed" truncate>
+            {repo.description}
+          </Text>
+        ) : null}
       </Box>
       <Group gap="xs">
-        <StatusBadge status={project.status} />
-        <StatusBadge status={project.repoMappingStatus} />
+        {repo.language ? (
+          <Badge size="xs" variant="light" color="indigo" tt="none">
+            {repo.language}
+          </Badge>
+        ) : null}
+        {repo.private ? (
+          <Badge size="xs" variant="outline" color="gray" tt="none">
+            private
+          </Badge>
+        ) : null}
+        {repo.archived ? (
+          <Badge size="xs" variant="outline" color="orange" tt="none">
+            archived
+          </Badge>
+        ) : null}
       </Group>
       <Text size="sm" c="dimmed">
-        {project.activeRuns} active · {project.failedRuns} failed
+        {repo.openIssues} open · ★ {repo.stars}
       </Text>
     </Group>
   );
