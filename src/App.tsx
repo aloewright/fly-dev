@@ -1,8 +1,28 @@
 /* AGPL-3.0-or-later */
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
+import {
+  Alert,
+  Anchor,
+  Badge,
+  Box,
+  Button,
+  Card,
+  Container,
+  Group,
+  Paper,
+  PasswordInput,
+  Select,
+  SimpleGrid,
+  Stack,
+  Text,
+  TextInput,
+  Textarea,
+  Title,
+} from "@mantine/core";
 import { fetchJson } from "@/lib/api";
+
+type Provider = "github" | "linear";
 
 type Overview = {
   user: {
@@ -22,7 +42,7 @@ type Overview = {
     costMicros: number;
   };
   connections: Array<{
-    provider: "github" | "linear";
+    provider: Provider;
     status: string;
     accountName: string | null;
     updatedAt: string | null;
@@ -75,21 +95,32 @@ type TaskResponse = {
   approvalRequired: boolean;
 };
 
+const PROVIDERS: Array<{ id: Provider; label: string }> = [
+  { id: "github", label: "GitHub" },
+  { id: "linear", label: "Linear" },
+];
+
 function getBannerFromUrl(): string | null {
   if (typeof window === "undefined") return null;
   const params = new URLSearchParams(window.location.search);
   if (params.get("signin_required")) {
     const provider = params.get("provider");
-    return provider
-      ? `Sign in to connect ${provider}.`
-      : "Sign in to continue.";
+    return provider ? `Sign in to connect ${provider}.` : "Sign in to continue.";
   }
   const oauthError = params.get("oauth_error");
   if (oauthError) {
     const provider = params.get("provider") ?? "the provider";
     return `OAuth with ${provider} failed: ${decodeURIComponent(oauthError)}. Try again.`;
   }
+  const connected = params.get("connected");
+  if (connected) {
+    return `${connected} connected.`;
+  }
   return null;
+}
+
+function startConnect(provider: Provider) {
+  window.location.href = `/api/integrations/${provider}/connect`;
 }
 
 function SignInForm({ banner }: { banner: string | null }) {
@@ -108,60 +139,64 @@ function SignInForm({ banner }: { banner: string | null }) {
     },
   });
   return (
-    <main className="min-h-screen bg-[#f7f8fb] text-[#17181c]">
-      <div className="mx-auto max-w-md px-5 py-12">
-        <h1 className="mb-2 text-2xl font-semibold">dev.fly.pm</h1>
-        <p className="mb-6 text-sm text-[#5b6472]">Sign in to continue.</p>
-        {banner ? (
-          <div className="mb-4 rounded-md border border-[#f1b8b8] bg-[#fff1f1] px-3 py-2 text-sm text-[#a12828]">
-            {banner}
-          </div>
-        ) : null}
+    <Container size={420} py={64}>
+      <Title order={1} size="h2" mb={4}>
+        dev.fly.pm
+      </Title>
+      <Text c="dimmed" size="sm" mb="lg">
+        Sign in to continue.
+      </Text>
+      {banner ? (
+        <Alert color="red" variant="light" mb="md">
+          {banner}
+        </Alert>
+      ) : null}
+      <Card withBorder padding="lg" radius="md">
         <form
-          className="grid gap-3 rounded-md border border-[#dfe3ea] bg-white p-4"
           onSubmit={(event) => {
             event.preventDefault();
             signIn.mutate();
           }}
         >
-          <label className="grid gap-1 text-sm">
-            <span className="text-[#5b6472]">Email</span>
-            <input
+          <Stack gap="sm">
+            <TextInput
+              label="Email"
               type="email"
               autoComplete="email"
               required
-              className="h-10 rounded border border-[#c9d0da] bg-white px-3 text-sm outline-none focus:border-[#3267d6]"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(event) => setEmail(event.currentTarget.value)}
             />
-          </label>
-          <label className="grid gap-1 text-sm">
-            <span className="text-[#5b6472]">Password</span>
-            <input
-              type="password"
+            <PasswordInput
+              label="Password"
               autoComplete="current-password"
               required
-              className="h-10 rounded border border-[#c9d0da] bg-white px-3 text-sm outline-none focus:border-[#3267d6]"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) => setPassword(event.currentTarget.value)}
             />
-          </label>
-          {signIn.error ? (
-            <p className="text-sm text-[#a12828]">{signIn.error.message}</p>
-          ) : null}
-          <Button disabled={signIn.isPending || email.length === 0 || password.length === 0}>
-            {signIn.isPending ? "Signing in…" : "Sign in"}
-          </Button>
+            {signIn.error ? (
+              <Text c="red" size="sm">
+                {signIn.error.message}
+              </Text>
+            ) : null}
+            <Button
+              type="submit"
+              loading={signIn.isPending}
+              disabled={email.length === 0 || password.length === 0}
+            >
+              Sign in
+            </Button>
+          </Stack>
         </form>
-      </div>
-    </main>
+      </Card>
+    </Container>
   );
 }
 
 export function App() {
   const queryClient = useQueryClient();
   const [objective, setObjective] = useState("");
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const overviewQuery = useQuery({
     queryKey: ["overview"],
@@ -171,8 +206,7 @@ export function App() {
   const banner = getBannerFromUrl();
 
   // Login is via Cloudflare Access, so sign-out must clear the Access session,
-  // not the unused better-auth one. Full-page navigate to the Worker's
-  // /api/access-logout, which 302s to the Access logout endpoint.
+  // not the unused better-auth one. Full-page navigate to /api/access-logout.
   function signOut() {
     window.location.href = "/api/access-logout";
   }
@@ -206,258 +240,346 @@ export function App() {
     taskMutation.mutate({
       objective,
       linearProjectId:
-        selectedProject && selectedProject.id !== "linear_pending" ? selectedProject.id : undefined,
+        selectedProject && selectedProject.id !== "linear_pending"
+          ? selectedProject.id
+          : undefined,
     });
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f8fb] text-[#17181c]">
-      <header className="border-b border-[#dfe3ea] bg-white">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-5 py-4">
-          <div>
-            <h1 className="text-2xl font-semibold">dev.fly.pm</h1>
-            <p className="text-sm text-[#5b6472]">
-              {overview?.user
-                ? `${overview.user.flyUserSlug} · ${overview.user.authSource}`
-                : "Checking session"}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <ConnectionButton provider="github" />
-            <ConnectionButton provider="linear" />
-            <Button variant="secondary" onClick={() => void overviewQuery.refetch()}>
-              Refresh
-            </Button>
-            {overview?.user ? (
-              <Button variant="secondary" onClick={signOut}>
-                Sign out
+    <Box mih="100vh" bg="var(--mantine-color-body)">
+      <Box
+        component="header"
+        bg="var(--mantine-color-default)"
+        style={{ borderBottom: "1px solid var(--mantine-color-default-border)" }}
+      >
+        <Container size="xl" py="md">
+          <Group justify="space-between" wrap="wrap">
+            <Box>
+              <Title order={1} size="h3">
+                dev.fly.pm
+              </Title>
+              <Text c="dimmed" size="sm">
+                {overview?.user
+                  ? `${overview.user.flyUserSlug} · ${overview.user.authSource}`
+                  : "Checking session"}
+              </Text>
+            </Box>
+            <Group gap="xs">
+              <Button variant="default" onClick={() => void overviewQuery.refetch()}>
+                Refresh
               </Button>
-            ) : null}
-          </div>
-        </div>
-      </header>
-
-      {banner ? (
-        <div className="mx-auto max-w-7xl px-5 pt-4">
-          <div className="rounded-md border border-[#f1b8b8] bg-[#fff1f1] px-3 py-2 text-sm text-[#a12828]">
-            {banner}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="mx-auto grid max-w-7xl gap-5 px-5 py-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <section className="grid gap-5">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric label="Usage events" value={overview?.usage.events ?? 0} />
-            <Metric label="Model calls" value={overview?.usage.modelCalls ?? 0} />
-            <Metric label="Container min" value={overview?.usage.containerMinutes ?? 0} />
-            <Metric label="Deploys" value={overview?.usage.deploys ?? 0} />
-          </div>
-
-          <section className="rounded-md border border-[#dfe3ea] bg-white p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="text-base font-semibold">Goal Intake</h2>
-              <span className="rounded bg-[#eef7f0] px-2 py-1 text-xs font-medium text-[#1f6b3a]">
-                approval gated
-              </span>
-            </div>
-            <form className="grid gap-3" onSubmit={submitTask}>
-              <select
-                className="h-10 rounded border border-[#c9d0da] bg-white px-3 text-sm"
-                value={selectedProject?.id ?? ""}
-                onChange={(event) => setSelectedProjectId(event.target.value)}
-              >
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-              <textarea
-                className="min-h-28 resize-y rounded border border-[#c9d0da] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[#3267d6]"
-                value={objective}
-                onChange={(event) => setObjective(event.target.value)}
-                placeholder="Ship the next verified iteration for this Linear project"
-              />
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-[#5b6472]">
-                  {taskMutation.data
-                    ? `${taskMutation.data.id} · ${taskMutation.data.status}`
-                    : taskMutation.error
-                      ? taskMutation.error.message
-                      : "Manual approval required before sandbox execution"}
-                </span>
-                <Button disabled={objective.trim().length < 4 || taskMutation.isPending}>
-                  Queue task
+              {overview?.user ? (
+                <Button variant="default" onClick={signOut}>
+                  Sign out
                 </Button>
-              </div>
-            </form>
-          </section>
+              ) : null}
+            </Group>
+          </Group>
+        </Container>
+      </Box>
 
-          <section className="rounded-md border border-[#dfe3ea] bg-white">
-            <div className="border-b border-[#e7eaf0] px-4 py-3">
-              <h2 className="text-base font-semibold">Linear Projects</h2>
-            </div>
-            <div className="divide-y divide-[#e7eaf0]">
-              {projects.map((project) => (
-                <ProjectRow key={project.id} project={project} />
-              ))}
-            </div>
-          </section>
+      <Container size="xl" py="md">
+        {banner ? (
+          <Alert
+            color={banner.includes("failed") ? "red" : "blue"}
+            variant="light"
+            mb="md"
+          >
+            {banner}
+          </Alert>
+        ) : null}
 
-          <section className="rounded-md border border-[#dfe3ea] bg-white">
-            <div className="border-b border-[#e7eaf0] px-4 py-3">
-              <h2 className="text-base font-semibold">Recent Runs</h2>
-            </div>
-            <div className="divide-y divide-[#e7eaf0]">
-              {(overview?.recentRuns ?? []).length > 0 ? (
-                overview!.recentRuns.map((run) => <RunRow key={run.id} run={run} />)
-              ) : (
-                <EmptyRow label="No runs queued" />
-              )}
-            </div>
-          </section>
-        </section>
+        <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="lg">
+          <Stack gap="lg">
+            <SimpleGrid cols={{ base: 2, lg: 4 }} spacing="md">
+              <Metric label="Usage events" value={overview?.usage.events ?? 0} />
+              <Metric label="Model calls" value={overview?.usage.modelCalls ?? 0} />
+              <Metric label="Container min" value={overview?.usage.containerMinutes ?? 0} />
+              <Metric label="Deploys" value={overview?.usage.deploys ?? 0} />
+            </SimpleGrid>
 
-        <aside className="grid content-start gap-5">
-          <section className="rounded-md border border-[#dfe3ea] bg-white">
-            <div className="border-b border-[#e7eaf0] px-4 py-3">
-              <h2 className="text-base font-semibold">Connections</h2>
-            </div>
-            <div className="divide-y divide-[#e7eaf0]">
-              {(overview?.connections ?? []).map((connection) => (
-                <div key={connection.provider} className="flex items-center justify-between px-4 py-3">
-                  <div>
-                    <p className="text-sm font-medium capitalize">{connection.provider}</p>
-                    <p className="text-xs text-[#5b6472]">{connection.accountName ?? "not connected"}</p>
-                  </div>
-                  <StatusBadge status={connection.status} />
-                </div>
-              ))}
-            </div>
-          </section>
+            <Card withBorder radius="md" padding="lg">
+              <Group justify="space-between" mb="md">
+                <Title order={2} size="h4">
+                  Goal Intake
+                </Title>
+                <Badge color="teal" variant="light">
+                  approval gated
+                </Badge>
+              </Group>
+              <form onSubmit={submitTask}>
+                <Stack gap="sm">
+                  <Select
+                    data={projects.map((project) => ({
+                      value: project.id,
+                      label: project.name,
+                    }))}
+                    value={selectedProject?.id ?? null}
+                    onChange={setSelectedProjectId}
+                    placeholder="Select a project"
+                    nothingFoundMessage="No projects"
+                  />
+                  <Textarea
+                    autosize
+                    minRows={4}
+                    value={objective}
+                    onChange={(event) => setObjective(event.currentTarget.value)}
+                    placeholder="Ship the next verified iteration for this Linear project"
+                  />
+                  <Group justify="space-between">
+                    <Text c="dimmed" size="sm">
+                      {taskMutation.data
+                        ? `${taskMutation.data.id} · ${taskMutation.data.status}`
+                        : taskMutation.error
+                          ? taskMutation.error.message
+                          : "Manual approval required before sandbox execution"}
+                    </Text>
+                    <Button
+                      type="submit"
+                      loading={taskMutation.isPending}
+                      disabled={objective.trim().length < 4}
+                    >
+                      Queue task
+                    </Button>
+                  </Group>
+                </Stack>
+              </form>
+            </Card>
 
-          <section className="rounded-md border border-[#dfe3ea] bg-white p-4">
-            <h2 className="mb-3 text-base font-semibold">Queue</h2>
-            <div className="grid grid-cols-2 gap-3">
-              <Metric label="Configured" value={overview?.queue.configured ? "yes" : "no"} />
-              <Metric label="Pending" value={overview?.queue.pendingApproximation ?? 0} />
-            </div>
-          </section>
+            <Card withBorder radius="md" padding={0}>
+              <Box px="lg" py="sm" style={sectionHeader}>
+                <Title order={2} size="h4">
+                  Linear Projects
+                </Title>
+              </Box>
+              <Stack gap={0}>
+                {projects.map((project) => (
+                  <ProjectRow key={project.id} project={project} />
+                ))}
+                {projects.length === 0 ? <EmptyRow label="No projects" /> : null}
+              </Stack>
+            </Card>
 
-          <section className="rounded-md border border-[#dfe3ea] bg-white">
-            <div className="border-b border-[#e7eaf0] px-4 py-3">
-              <h2 className="text-base font-semibold">Templates</h2>
-            </div>
-            <div className="divide-y divide-[#e7eaf0]">
-              {(overview?.templates ?? []).map((template) => (
-                <div key={template.id} className="px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium">{template.kind}</p>
-                    <StatusBadge status={template.status} />
-                  </div>
-                  <a className="mt-1 block break-all text-xs text-[#3267d6]" href={`https://github.com/${template.repo}`}>
-                    {template.repo}
-                  </a>
-                </div>
-              ))}
-            </div>
-          </section>
+            <Card withBorder radius="md" padding={0}>
+              <Box px="lg" py="sm" style={sectionHeader}>
+                <Title order={2} size="h4">
+                  Recent Runs
+                </Title>
+              </Box>
+              <Stack gap={0}>
+                {(overview?.recentRuns ?? []).length > 0 ? (
+                  overview!.recentRuns.map((run) => <RunRow key={run.id} run={run} />)
+                ) : (
+                  <EmptyRow label="No runs queued" />
+                )}
+              </Stack>
+            </Card>
+          </Stack>
 
-          <section className="rounded-md border border-[#dfe3ea] bg-white">
-            <div className="border-b border-[#e7eaf0] px-4 py-3">
-              <h2 className="text-base font-semibold">Artifacts</h2>
-            </div>
-            <div className="divide-y divide-[#e7eaf0]">
-              {(overview?.recentArtifacts ?? []).length > 0 ? (
-                overview!.recentArtifacts.map((artifact) => (
-                  <div key={artifact.id} className="px-4 py-3 text-sm">
-                    <p className="font-medium">{artifact.kind}</p>
-                    <p className="break-all text-xs text-[#5b6472]">{artifact.url ?? artifact.r2Key}</p>
-                  </div>
-                ))
-              ) : (
-                <EmptyRow label="No artifacts written" />
-              )}
-            </div>
-          </section>
-        </aside>
-      </div>
-    </main>
+          <Stack gap="lg">
+            <Card withBorder radius="md" padding={0}>
+              <Box px="lg" py="sm" style={sectionHeader}>
+                <Title order={2} size="h4">
+                  Connections
+                </Title>
+              </Box>
+              <Stack gap={0}>
+                {PROVIDERS.map((provider) => {
+                  const connection = overview?.connections.find(
+                    (item) => item.provider === provider.id,
+                  );
+                  const connected = connection?.status === "connected";
+                  return (
+                    <Group
+                      key={provider.id}
+                      justify="space-between"
+                      px="lg"
+                      py="sm"
+                      style={rowBorder}
+                    >
+                      <Box>
+                        <Text size="sm" fw={600}>
+                          {provider.label}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {connection?.accountName ?? "not connected"}
+                        </Text>
+                      </Box>
+                      {connected ? (
+                        <StatusBadge status={connection!.status} />
+                      ) : (
+                        <Button
+                          size="xs"
+                          variant="light"
+                          onClick={() => startConnect(provider.id)}
+                        >
+                          Connect {provider.label}
+                        </Button>
+                      )}
+                    </Group>
+                  );
+                })}
+              </Stack>
+            </Card>
+
+            <Card withBorder radius="md" padding="lg">
+              <Title order={2} size="h4" mb="md">
+                Queue
+              </Title>
+              <SimpleGrid cols={2} spacing="md">
+                <Metric label="Configured" value={overview?.queue.configured ? "yes" : "no"} />
+                <Metric label="Pending" value={overview?.queue.pendingApproximation ?? 0} />
+              </SimpleGrid>
+            </Card>
+
+            <Card withBorder radius="md" padding={0}>
+              <Box px="lg" py="sm" style={sectionHeader}>
+                <Title order={2} size="h4">
+                  Templates
+                </Title>
+              </Box>
+              <Stack gap={0}>
+                {(overview?.templates ?? []).map((template) => (
+                  <Box key={template.id} px="lg" py="sm" style={rowBorder}>
+                    <Group justify="space-between">
+                      <Text size="sm" fw={600}>
+                        {template.kind}
+                      </Text>
+                      <StatusBadge status={template.status} />
+                    </Group>
+                    <Anchor
+                      href={`https://github.com/${template.repo}`}
+                      size="xs"
+                      mt={4}
+                      style={{ wordBreak: "break-all" }}
+                    >
+                      {template.repo}
+                    </Anchor>
+                  </Box>
+                ))}
+                {(overview?.templates ?? []).length === 0 ? (
+                  <EmptyRow label="No templates" />
+                ) : null}
+              </Stack>
+            </Card>
+
+            <Card withBorder radius="md" padding={0}>
+              <Box px="lg" py="sm" style={sectionHeader}>
+                <Title order={2} size="h4">
+                  Artifacts
+                </Title>
+              </Box>
+              <Stack gap={0}>
+                {(overview?.recentArtifacts ?? []).length > 0 ? (
+                  overview!.recentArtifacts.map((artifact) => (
+                    <Box key={artifact.id} px="lg" py="sm" style={rowBorder}>
+                      <Text size="sm" fw={600}>
+                        {artifact.kind}
+                      </Text>
+                      <Text size="xs" c="dimmed" style={{ wordBreak: "break-all" }}>
+                        {artifact.url ?? artifact.r2Key}
+                      </Text>
+                    </Box>
+                  ))
+                ) : (
+                  <EmptyRow label="No artifacts written" />
+                )}
+              </Stack>
+            </Card>
+          </Stack>
+        </SimpleGrid>
+      </Container>
+    </Box>
   );
 }
 
-function ConnectionButton({ provider }: { provider: "github" | "linear" }) {
-  return (
-    <Button
-      variant="secondary"
-      onClick={() => {
-        window.location.href = `/api/integrations/${provider}/connect`;
-      }}
-    >
-      Connect {provider}
-    </Button>
-  );
-}
+const sectionHeader: React.CSSProperties = {
+  borderBottom: "1px solid var(--mantine-color-default-border)",
+};
+
+const rowBorder: React.CSSProperties = {
+  borderTop: "1px solid var(--mantine-color-default-border)",
+};
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-md border border-[#dfe3ea] bg-white p-3">
-      <p className="text-xs font-medium uppercase text-[#6a7382]">{label}</p>
-      <p className="mt-1 text-2xl font-semibold">{value}</p>
-    </div>
+    <Paper withBorder radius="md" p="md">
+      <Text size="xs" fw={600} tt="uppercase" c="dimmed">
+        {label}
+      </Text>
+      <Text size="xl" fw={700} mt={4}>
+        {value}
+      </Text>
+    </Paper>
   );
 }
 
 function ProjectRow({ project }: { project: Overview["projects"][number] }) {
   return (
-    <div className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_190px_120px] md:items-center">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{project.name}</p>
-        <p className="truncate text-xs text-[#5b6472]">{project.repoUrl ?? project.url ?? "repository pending"}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
+    <Group justify="space-between" px="lg" py="sm" style={rowBorder} wrap="wrap">
+      <Box style={{ minWidth: 0, flex: 1 }}>
+        <Text size="sm" fw={600} truncate>
+          {project.name}
+        </Text>
+        <Text size="xs" c="dimmed" truncate>
+          {project.repoUrl ?? project.url ?? "repository pending"}
+        </Text>
+      </Box>
+      <Group gap="xs">
         <StatusBadge status={project.status} />
         <StatusBadge status={project.repoMappingStatus} />
-      </div>
-      <p className="text-sm text-[#5b6472]">
+      </Group>
+      <Text size="sm" c="dimmed">
         {project.activeRuns} active · {project.failedRuns} failed
-      </p>
-    </div>
+      </Text>
+    </Group>
   );
 }
 
 function RunRow({ run }: { run: Overview["recentRuns"][number] }) {
   return (
-    <div className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_170px_110px] md:items-center">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{run.objective}</p>
-        <p className="truncate text-xs text-[#5b6472]">{run.projectName ?? run.id}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
+    <Group justify="space-between" px="lg" py="sm" style={rowBorder} wrap="wrap">
+      <Box style={{ minWidth: 0, flex: 1 }}>
+        <Text size="sm" fw={600} truncate>
+          {run.objective}
+        </Text>
+        <Text size="xs" c="dimmed" truncate>
+          {run.projectName ?? run.id}
+        </Text>
+      </Box>
+      <Group gap="xs">
         <StatusBadge status={run.status} />
         <StatusBadge status={run.agentProvider} />
-      </div>
-      <p className="text-sm text-[#5b6472]">{run.approvalRequired ? "approval" : "queued"}</p>
-    </div>
+      </Group>
+      <Text size="sm" c="dimmed">
+        {run.approvalRequired ? "approval" : "queued"}
+      </Text>
+    </Group>
   );
 }
 
 function StatusBadge({ status }: { status: string }) {
   const normalized = status.replaceAll("_", " ");
-  const tone =
+  const color =
     status.includes("failed") || status.includes("error")
-      ? "border-[#f1b8b8] bg-[#fff1f1] text-[#a12828]"
+      ? "red"
       : status === "connected" || status === "active" || status === "mapped"
-        ? "border-[#b9dcc5] bg-[#eef8f1] text-[#1f6b3a]"
-        : "border-[#ccd6ea] bg-[#f1f5fb] text-[#31507d]";
+        ? "teal"
+        : "indigo";
   return (
-    <span className={`rounded border px-2 py-1 text-xs font-medium ${tone}`}>
+    <Badge color={color} variant="light" tt="none">
       {normalized}
-    </span>
+    </Badge>
   );
 }
 
 function EmptyRow({ label }: { label: string }) {
-  return <div className="px-4 py-6 text-sm text-[#6a7382]">{label}</div>;
+  return (
+    <Box px="lg" py="xl">
+      <Text c="dimmed" size="sm">
+        {label}
+      </Text>
+    </Box>
+  );
 }
